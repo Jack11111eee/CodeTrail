@@ -134,6 +134,22 @@ describe("resolveNode", () => {
     expect(resolved.bin).toBe(pinned);
   });
 
+  it("falls through a CODETRAIL_NODE_BIN that does not exist", async () => {
+    const pinned = await writeFakeNode(nvmNode(home, "24.13.0"), "24.13.0");
+
+    const resolved = resolveNode({
+      env: {
+        CODETRAIL_NODE_BIN: path.join(dir, "missing", "node"),
+        HOME: home,
+        PATH: "",
+      },
+      repoRoot,
+    });
+
+    expect(resolved.via).toBe("nvm");
+    expect(resolved.bin).toBe(pinned);
+  });
+
   it("falls back to node on PATH when the pinned version is not installed", async () => {
     await pinVersion("99.0.0");
     const onPath = await writeFakeNode(path.join(dir, "path-bin"), "24.13.0");
@@ -268,15 +284,11 @@ describe("package.json script table", () => {
       for (const segment of command.split(/&&|\|\||;|\|/u)) {
         const tokens = segment.trim().split(/\s+/u);
         if (tokens[0] !== "node") continue;
-        const args = tokens.slice(1);
-        // `node -e '…'` inline snippets load no repository code, so the ambient
-        // interpreter is fine; anything that names a path must use the launcher.
-        if (args.some((arg) => ["-e", "--eval", "-p", "--print"].includes(arg))) {
-          continue;
-        }
-        const target = args.find((arg) => !arg.startsWith("-"));
-        if (target === undefined) continue;
-        expect(target, `${name} runs ${target} under the ambient interpreter`).toBe(
+        // No exemptions: every `node …` segment — including inline `-e`
+        // snippets — must hand off to the launcher, so the whole script table
+        // runs on the pinned interpreter or fails loudly. The launcher is
+        // therefore the first thing after `node`, never a flag.
+        expect(tokens[1], `${name} runs under the ambient interpreter`).toBe(
           "scripts/with-node.mjs",
         );
       }

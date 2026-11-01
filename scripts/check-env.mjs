@@ -66,9 +66,13 @@ const FORBIDDEN_GLOBAL_COMMANDS = [
   ["npm", "i", "-g"].join(" "),
 ];
 
-/** Filesystem APIs that would let the launcher write outside the repository. */
+/**
+ * Filesystem APIs that would let the launcher write outside the repository:
+ * the mutating entry points of `node:fs` and `node:fs/promises`, including the
+ * bare `open`/`openSync` that only write when given a write flag.
+ */
 const LAUNCHER_WRITE_PATTERN =
-  /\b(writeFileSync|appendFileSync|mkdirSync|rmSync|rmdirSync|unlinkSync|createWriteStream|openSync)\b/u;
+  /\b(writeFileSync|writeFile|appendFileSync|appendFile|mkdirSync|mkdir|rmSync|rm|rmdirSync|rmdir|unlinkSync|unlink|renameSync|rename|copyFileSync|copyFile|chmodSync|chmod|createWriteStream|openSync|open)\b/u;
 
 function parseArgs(argv) {
   const options = {
@@ -146,46 +150,68 @@ function pnpmAvailable() {
 }
 
 /**
+ * Runs `probe` with the `ExperimentalWarning` that `node:sqlite` raises on
+ * import filtered out.
+ *
+ * The report is the contract here, so stderr must stay clean; but the host may
+ * have installed its own `warning` listeners (vitest does), so this filters the
+ * warning at the source for the duration of the probe instead of removing
+ * listeners it did not add. `process.emitWarning` is restored in `finally`.
+ */
+async function withoutSqliteWarning(probe) {
+  const emitWarning = process.emitWarning;
+  process.emitWarning = function filtered(warning, ...rest) {
+    const message =
+      typeof warning === "string" ? warning : (warning?.message ?? "");
+    if (/SQLite is an experimental feature/u.test(String(message))) return;
+    return emitWarning.call(process, warning, ...rest);
+  };
+  try {
+    return await probe();
+  } finally {
+    process.emitWarning = emitWarning;
+  }
+}
+
+/**
  * Proves the running interpreter can open an in-memory database and use an
  * FTS5 virtual table with the tokenizer the retrieval layer relies on.
  */
 async function sqliteFts5() {
-  // `node:sqlite` still announces itself as experimental; the report is the
-  // contract here, so keep stderr free of that notice.
-  process.removeAllListeners("warning");
-
-  let sqlite;
-  try {
-    sqlite = await import("node:sqlite");
-  } catch {
-    return { ok: false, detail: "node:sqlite is unavailable" };
-  }
-
-  let database;
-  try {
-    database = new sqlite.DatabaseSync(":memory:");
-    database.exec(
-      "CREATE VIRTUAL TABLE probe USING fts5(body, tokenize = 'porter unicode61')",
-    );
-    database
-      .prepare("INSERT INTO probe(body) VALUES (?)")
-      .run("旧快照丢了 snapshot evicted");
-    const row = database
-      .prepare("SELECT count(*) AS matches FROM probe WHERE probe MATCH ?")
-      .get("snapshot");
-    if (!row || Number(row.matches) < 1) {
-      return { ok: false, detail: "fts5 query returned no rows" };
-    }
-    return { ok: true, detail: "fts5 porter unicode61" };
-  } catch (error) {
-    return { ok: false, detail: `fts5 probe failed: ${error.message}` };
-  } finally {
+  return withoutSqliteWarning(async () => {
+    let sqlite;
     try {
-      database?.close();
+      sqlite = await import("node:sqlite");
     } catch {
-      // Nothing left to close.
+      return { ok: false, detail: "node:sqlite is unavailable" };
     }
-  }
+
+    let database;
+    try {
+      database = new sqlite.DatabaseSync(":memory:");
+      database.exec(
+        "CREATE VIRTUAL TABLE probe USING fts5(body, tokenize = 'porter unicode61')",
+      );
+      database
+        .prepare("INSERT INTO probe(body) VALUES (?)")
+        .run("旧快照丢了 snapshot evicted");
+      const row = database
+        .prepare("SELECT count(*) AS matches FROM probe WHERE probe MATCH ?")
+        .get("snapshot");
+      if (!row || Number(row.matches) < 1) {
+        return { ok: false, detail: "fts5 query returned no rows" };
+      }
+      return { ok: true, detail: "fts5 porter unicode61" };
+    } catch (error) {
+      return { ok: false, detail: `fts5 probe failed: ${error.message}` };
+    } finally {
+      try {
+        database?.close();
+      } catch {
+        // Nothing left to close.
+      }
+    }
+  });
 }
 
 function upstreamCommit(root) {
@@ -390,11 +416,18 @@ async function main(argv) {
     resolutionError = error;
   }
 
-  const nodeVersion = options.simulateNode ?? parseVersion(process.version)?.version ?? process.version;
+  // The verdict describes the interpreter every script will actually run under,
+  // not the ambient one that happened to start this file. AC-ENV-04 calls
+  // `node scripts/check-env.mjs --audit-global`, and that `node` may be below
+  // `engines.node`; the launcher still resolves a usable interpreter for the
+  // scripts, so only the resolved version decides `node`.
+  const nodeVersion =
+    options.simulateNode ??
+    resolved?.version ??
+    parseVersion(process.version)?.version ??
+    process.version;
   const nodeOk =
-    resolved !== null &&
-    satisfies(nodeVersion, DEFAULT_REQUIREMENT) &&
-    satisfies(resolved.version, DEFAULT_REQUIREMENT);
+    resolved !== null && satisfies(resolved.version, DEFAULT_REQUIREMENT);
   const commitOk = commit === PINNED_UPSTREAM_COMMIT;
 
   if (!nodeOk) {

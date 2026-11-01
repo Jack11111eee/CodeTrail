@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import {
+  appendFile,
   chmod,
   cp,
   mkdir,
@@ -46,6 +47,7 @@ interface AuditReport {
     hits: { file: string; line: number; command: string }[];
     checks: { field: string; ok: boolean }[];
   };
+  node?: string;
   nodeVersion?: string;
   resolvedNode?: string | null;
   resolvedVia?: string | null;
@@ -188,6 +190,87 @@ describe("--audit-global", () => {
   });
 });
 
+describe("--audit-global token coverage", () => {
+  /**
+   * Every command AC-ENV-04 names. The coder's suite only planted `nvm
+   * install`, so a typo or a dropped entry in the forbidden list would have
+   * passed unnoticed for the other three.
+   */
+  const FORBIDDEN = ["nvm alias default", "nvm install", "brew link", "npm i -g"];
+
+  /**
+   * Plants `token` in all three scanned targets at once: `package.json` as a
+   * script body, `README.md` as a trailing instruction and `scripts/` as a new
+   * file. One assertion therefore proves the audit greps every documented
+   * location, not only the one the other tests happen to use.
+   */
+  async function plantEverywhere(target: string, token: string): Promise<void> {
+    const manifestPath = path.join(target, "package.json");
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as {
+      scripts: Record<string, string>;
+    };
+    manifest.scripts["install-toolchain"] = token;
+    await writeFile(
+      manifestPath,
+      `${JSON.stringify(manifest, null, 2)}\n`,
+      "utf8",
+    );
+
+    await appendFile(
+      path.join(target, "README.md"),
+      `\nRun \`${token}\` before the first build.\n`,
+      "utf8",
+    );
+
+    await writeFile(
+      path.join(target, "scripts", "planted.mjs"),
+      `// ${token}\n`,
+      "utf8",
+    );
+  }
+
+  for (const token of FORBIDDEN) {
+    it(`catches \`${token}\` in package.json, README.md and scripts/`, async () => {
+      await plantEverywhere(root, token);
+
+      const result = await runCheckEnv(["--audit-global", "--root", root]);
+
+      expect(result.code).not.toBe(0);
+      expect(result.stderr).toContain("global_node_mutation");
+      expect(result.stderr).toContain(token);
+
+      const report = JSON.parse(result.stdout) as AuditReport;
+      expect(report.auditGlobal?.ok).toBe(false);
+      const hits = report.auditGlobal?.hits ?? [];
+      expect(hits.map((hit) => hit.file).sort()).toEqual([
+        "README.md",
+        "package.json",
+        "scripts/planted.mjs",
+      ]);
+      expect(new Set(hits.map((hit) => hit.command))).toEqual(new Set([token]));
+      for (const hit of hits) expect(hit.line).toBeGreaterThan(0);
+    });
+  }
+
+  it("does not flag a README that merely names the version requirement", async () => {
+    // The minimal README must be able to say "Node.js 22.22.0 or newer" and
+    // describe the launcher without tripping the audit.
+    const readme = await readFile(path.join(root, "README.md"), "utf8");
+    expect(readme).toContain("Node.js 22.22.0 or newer");
+    await appendFile(
+      path.join(root, "README.md"),
+      "\nUse the version pinned in `.node-version`; the launcher never installs a runtime.\n",
+      "utf8",
+    );
+
+    const result = await runCheckEnv(["--audit-global", "--root", root]);
+
+    expect(result.code).toBe(0);
+    const report = JSON.parse(result.stdout) as AuditReport;
+    expect(report.auditGlobal?.hits).toEqual([]);
+  });
+});
+
 describe("--simulate-node", () => {
   it("rejects 22.21.99 (one patch below the floor)", async () => {
     const result = await runCheckEnv(["--simulate-node", "22.21.99"], { HOME: home });
@@ -219,6 +302,33 @@ describe("--simulate-node", () => {
 
     expect(await listFiles(home)).toEqual(before);
     expect(before).toEqual([]);
+  });
+});
+
+describe("node verdict (AC-ENV-01/04)", () => {
+  /**
+   * AC-ENV-04 runs `node scripts/check-env.mjs --audit-global`, and that `node`
+   * may be below `engines.node`. The report must describe the interpreter the
+   * scripts will run under, so it is pinned here to a version that differs from
+   * whatever interpreter is executing the test: a verdict taken from
+   * `process.version` would report the ambient version instead.
+   */
+  it("reports the resolved interpreter's version, not the ambient one", async () => {
+    await writeFile(path.join(root, ".node-version"), "23.0.0\n", "utf8");
+    const pinned = await writeFakeNode(
+      path.join(home, ".nvm", "versions", "node", "v23.0.0", "bin"),
+      "23.0.0",
+    );
+
+    const result = await runCheckEnv(["--root", root], { HOME: home });
+
+    expect(result.stderr).toBe("");
+    expect(result.code).toBe(0);
+    const report = JSON.parse(result.stdout) as AuditReport;
+    expect(report.node).toBe("ok");
+    expect(report.nodeVersion).toBe("23.0.0");
+    expect(report.resolvedNode).toBe(pinned);
+    expect(report.resolvedVia).toBe("nvm");
   });
 });
 
