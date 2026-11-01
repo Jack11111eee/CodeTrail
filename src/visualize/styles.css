@@ -121,6 +121,18 @@ a:hover {
   color: var(--muted);
   letter-spacing: 0.02em;
 }
+[data-testid="learning-entry"] {
+  display: inline-flex;
+  align-items: center;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--lc-blue);
+  text-decoration: none;
+  padding: 6px 12px;
+  border: 1px solid var(--edge);
+  border-radius: 100px;
+  transition: border-color 0.15s ease;
+}
 .spacer {
   flex: 1;
 }

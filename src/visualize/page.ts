@@ -66,6 +66,7 @@ ${cspMeta}
     <div class="divider"></div>
     <div class="title">OpenWiki<small id="wiki-name">wiki visualizer</small></div>
   </div>
+  <a href="/learn" data-testid="learning-entry">在 Codetrail 中学习</a>
   <div class="spacer"></div>
   <div class="${liveClass}" id="live"><span class="live-dot"></span><span id="live-text">${liveStatus}</span></div>
   <div class="icon-btn" id="toggle-graph" title="Hide graph">⛶</div>
