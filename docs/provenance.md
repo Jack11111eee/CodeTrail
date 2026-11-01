@@ -75,7 +75,7 @@ self-test exercise a copy instead of the working tree.
 
 ## Allowed modifications
 
-The fork may touch at most 12 upstream paths; it currently records 9, each with a
+The fork may touch at most 12 upstream paths; it currently records 10, each with a
 reason in `UPSTREAM_BASE.json.allowedModifications`:
 
 | Path | Why |
@@ -84,6 +84,7 @@ reason in `UPSTREAM_BASE.json.allowedModifications`:
 | `src/generation/repository-run.ts` | forwards `writeRepoFiles` to `ensureCodeModeRepoSetup` at the call site inside `beginRepositoryRun` |
 | `src/agent/repository-runner.ts` | forwards `writeRepoFiles` from `NativeRepositoryGenerationOptions` |
 | `package.json` | fork script table, `files` excludes `dist/learning/testing`, description notes the fork |
+| `tsconfig.json` | server project includes `src/learning/**/*.ts` and excludes the DOM client entry, so DOM code never type-checks against the server libs |
 | `tsconfig.client.json` | compiles `src/learning/ui/client.ts` against the DOM libs |
 | `README.md` | replaced by the Codetrail README |
 | `src/visualize/page.ts` | adds the learning entry link to the page header |

@@ -36,6 +36,8 @@ const EXPECTED_ALLOWED_MODIFICATIONS = [
   "src/generation/repository-run.ts",
   "src/agent/repository-runner.ts",
   "package.json",
+  // The server project's learning include/exclude split (architecture 18.2).
+  "tsconfig.json",
   "tsconfig.client.json",
   "README.md",
   "src/visualize/page.ts",
