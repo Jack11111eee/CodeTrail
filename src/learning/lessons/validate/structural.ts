@@ -294,7 +294,20 @@ function codeForFailure(path: string): string {
     return "layering";
   }
   if (path.startsWith("boundaries")) return "boundaries";
+  if (
+    path.startsWith("behaviorChange") ||
+    path.startsWith("affectedModules") ||
+    path.startsWith("keyTechnologies") ||
+    path.startsWith("unverifiedEffects") ||
+    path.startsWith("omittedReasons") ||
+    path === "alternatives"
+  ) {
+    return "change_fields";
+  }
+  if (path.startsWith("context.comparison")) return "evidence_compare";
+  if (/^statements\.\d+\.side$/u.test(path)) return "evidence_compare";
   if (path.startsWith("diagram.kind")) return "diagram_kind";
+  if (path.startsWith("diagram.")) return "diagram_evidence";
   if (path.startsWith("scenario.kind")) return "scenario_kind";
   if (path.startsWith("scenario.isExample")) return "example_label";
   return "structural";
