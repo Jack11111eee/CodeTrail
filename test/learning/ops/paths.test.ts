@@ -256,6 +256,38 @@ describe("assertInsideDataDir", () => {
     expect((error as LearningError).details?.reason).toBe("symlink_escape");
   });
 
+  it("rejects a dangling symlink that points outside the root", () => {
+    const dir = makeTempDir();
+    const outside = makeTempDir();
+    const paths = resolveDataPaths({ CODETRAIL_DATA_DIR: dir });
+    fs.symlinkSync(
+      path.join(outside, "not-yet-created"),
+      path.join(dir, "dangling"),
+    );
+
+    const error = capture(() => assertInsideDataDir(paths, "dangling"));
+    expect(error).toBeInstanceOf(LearningError);
+    expect((error as LearningError).code).toBe("out_of_scope_path");
+    expect((error as LearningError).details?.reason).toBe("dangling_symlink");
+  });
+
+  it("rejects a dangling symlink in the middle of the path", () => {
+    const dir = makeTempDir();
+    const outside = makeTempDir();
+    const paths = resolveDataPaths({ CODETRAIL_DATA_DIR: dir });
+    fs.symlinkSync(
+      path.join(outside, "not-yet-created"),
+      path.join(dir, "dangling"),
+    );
+
+    const error = capture(() =>
+      assertInsideDataDir(paths, "dangling/child/file.txt"),
+    );
+    expect(error).toBeInstanceOf(LearningError);
+    expect((error as LearningError).code).toBe("out_of_scope_path");
+    expect((error as LearningError).details?.reason).toBe("dangling_symlink");
+  });
+
   it("follows a symlink that stays inside the root", () => {
     const dir = makeTempDir();
     const paths = resolveDataPaths({ CODETRAIL_DATA_DIR: dir });

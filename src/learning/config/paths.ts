@@ -40,6 +40,11 @@ function expandHome(value: string): string {
  * Resolves `candidate` to a real path, following symlinks in the portion that
  * exists and preserving the remainder. The data directory is created lazily, so
  * a plain `realpathSync` cannot be used on a fresh install.
+ *
+ * A component that exists but cannot be resolved is a dangling symlink. It
+ * must not be treated as a not-yet-created tail segment: following it at write
+ * time would land wherever its target points, potentially outside the root.
+ * Such a path is rejected instead.
  */
 function canonicalize(candidate: string): string {
   let current = path.resolve(candidate);
@@ -49,6 +54,15 @@ function canonicalize(candidate: string): string {
       const real = fs.realpathSync(current);
       return tail.length === 0 ? real : path.join(real, ...tail.reverse());
     } catch {
+      // `lstat` does not follow the link, so a dangling symlink still reports
+      // an entry here while `realpath` above failed. A genuinely missing path
+      // reports no entry and is walked up as a lazily-created tail segment.
+      if (fs.lstatSync(current, { throwIfNoEntry: false }) !== undefined) {
+        throw new LearningError("out_of_scope_path", "路径超出允许范围", {
+          path: candidate,
+          reason: "dangling_symlink",
+        });
+      }
       const parent = path.dirname(current);
       if (parent === current) return path.resolve(candidate);
       tail.push(path.basename(current));
