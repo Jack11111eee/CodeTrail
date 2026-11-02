@@ -621,6 +621,10 @@
       "reason": "fork patch: adds the env/provenance/fixtures/accept/smoke/backup/restore/gc/licenses scripts, appends \"!dist/learning/testing\" to files and notes the fork in the description; name, version, engines, packageManager, bin, pi and keywords stay unchanged so test/version.test.ts and test/integrations/package-contents.test.ts stay green"
     },
     {
+      "path": "tsconfig.json",
+      "reason": "fork patch: include gains src/learning/**/*.ts and exclude gains src/learning/ui/client.ts and src/learning/ui/client/** so the server project never type-checks DOM code; tsconfig.client.json extends this file and re-includes the client entry (architecture 18.2, AC-ENV-03, AC-FORK-06)"
+    },
+    {
       "path": "tsconfig.client.json",
       "reason": "fork patch: include gains src/learning/ui/client.ts so the learning browser bundle is type-checked against the DOM libs while the server project keeps it excluded"
     },

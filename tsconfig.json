@@ -13,6 +13,10 @@
     "strict": true,
     "target": "ES2022"
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx"],
-  "exclude": ["src/visualize/client.ts"]
+  "include": ["src/**/*.ts", "src/**/*.tsx", "src/learning/**/*.ts"],
+  "exclude": [
+    "src/visualize/client.ts",
+    "src/learning/ui/client.ts",
+    "src/learning/ui/client/**"
+  ]
 }

@@ -4,6 +4,6 @@
     "declaration": false,
     "lib": ["ES2022", "DOM", "DOM.Iterable"]
   },
-  "include": ["src/visualize/client.ts"],
+  "include": ["src/visualize/client.ts", "src/learning/ui/client.ts"],
   "exclude": []
 }
