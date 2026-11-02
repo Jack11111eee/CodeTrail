@@ -343,7 +343,6 @@ function toolMetrics(step: ScriptStep): string {
 class ScriptedChatModel extends BaseChatModel<BaseChatModelCallOptions> {
   private readonly modelOptions: ScriptedModelOptions;
   private readonly callCounts = new Map<string, number>();
-  private offeredTools: string[] = [];
   private script: ScriptFile | null = null;
   private toolCallSeq = 0;
 
@@ -364,9 +363,6 @@ class ScriptedChatModel extends BaseChatModel<BaseChatModelCallOptions> {
     AIMessageChunk,
     BaseChatModelCallOptions
   > {
-    this.offeredTools = tools
-      .map(toolNameOf)
-      .filter((name): name is string => name !== null);
     // `BaseChatModel` leaves `bindTools` to concrete providers; binding the
     // tools as call options is what every provider implementation does, and it
     // is how the mock receives them back in `_generate`.
@@ -383,8 +379,15 @@ class ScriptedChatModel extends BaseChatModel<BaseChatModelCallOptions> {
     return this.script;
   }
 
+  /**
+   * Tool names for the current call, taken only from the call options.
+   *
+   * `bindTools` returns a runnable bound to its own `tools` call option, so
+   * every invocation carries the tool set that produced it. Reading instance
+   * state here instead would let a later `bindTools` overwrite an earlier
+   * runnable's kind.
+   */
   private offeredToolNames(options: Record<string, unknown>): string[] {
-    if (this.offeredTools.length > 0) return this.offeredTools;
     const raw = options.tools;
     if (!Array.isArray(raw)) return [];
     const names: string[] = [];

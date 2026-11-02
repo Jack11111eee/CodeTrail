@@ -7,15 +7,23 @@
  * must never depend on the wall clock during a run.
  *
  * The initial instant is `fixed`, else `CODETRAIL_NOW`, else `Date.now()`.
- * `CODETRAIL_NOW` is validated by `resolveEnv`, so a malformed timestamp fails
- * with `invalid_input` before an inconsistent instant can leak into a record.
+ * Only `CODETRAIL_NOW` is validated here, so an unrelated malformed runtime
+ * variable cannot break clock creation; a malformed timestamp fails with
+ * `invalid_input` before an inconsistent instant can leak into a record.
  */
 
-import { resolveEnv } from "../config/env.js";
 import { LearningError } from "../contracts/index.js";
 import type { Clock } from "../contracts/index.js";
 
 export type { Clock };
+
+/** `CODETRAIL_NOW`, trimmed; `null` when absent or blank. */
+function envInstant(env: NodeJS.ProcessEnv): string | null {
+  const raw = env.CODETRAIL_NOW;
+  if (typeof raw !== "string") return null;
+  const trimmed = raw.trim();
+  return trimmed === "" ? null : trimmed;
+}
 
 function parseInstant(value: string, field: string): number {
   const parsed = Date.parse(value);
@@ -37,7 +45,7 @@ export function createClock(fixed?: string): Clock {
   if (fixed !== undefined) {
     current = parseInstant(fixed, "fixed");
   } else {
-    const now = resolveEnv(process.env).now;
+    const now = envInstant(process.env);
     current = now === null ? Date.now() : parseInstant(now, "CODETRAIL_NOW");
   }
 

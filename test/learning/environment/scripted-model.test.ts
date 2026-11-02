@@ -363,6 +363,157 @@ describe("scripted model missing fixtures", () => {
   });
 });
 
+describe("scripted model binding isolation", () => {
+  /**
+   * `bindTools` hands the agent a runnable configured with the tools it was
+   * given. Two bindings of the same model (planner then page worker) must each
+   * keep their own tool set; mutating shared instance state would make the
+   * first runnable silently answer as the second worker kind.
+   */
+  it("keeps every bound runnable on the tools it received", async () => {
+    const dir = makeDir({
+      scripts: [
+        { workerKind: "planner", steps: [{ content: "planner" }] },
+        {
+          workerKind: "page",
+          pagePath: "guide/intro",
+          steps: [{ content: "page" }],
+        },
+        { workerKind: "qa", steps: [{ content: "qa" }] },
+      ],
+    });
+    const model = makeModel(dir, "qa");
+    const planner = bind(model, [{ name: "submit_plan" }]);
+    const page = bind(model, [{ name: "submit_page" }]);
+
+    const plannerOut = await planner.invoke(pageMessages("guide/intro"));
+    expect(plannerOut.content).toBe("planner");
+    const pageOut = await page.invoke(pageMessages("guide/intro"));
+    expect(pageOut.content).toBe("page");
+
+    // The base model itself was never bound, so it keeps owning-role behaviour.
+    const baseOut = await model.invoke(pageMessages("guide/intro"));
+    expect(baseOut.content).toBe("qa");
+  });
+});
+
+describe("scripted model role fallbacks", () => {
+  it("maps repo_job to planner and page_worker to page", async () => {
+    const dir = makeDir({
+      scripts: [
+        { workerKind: "planner", steps: [{ content: "planner" }] },
+        {
+          workerKind: "page",
+          pagePath: "guide/intro",
+          steps: [{ content: "page" }],
+        },
+      ],
+    });
+
+    expect(
+      await textOf(makeModel(dir, "repo_job"), [], [new HumanMessage("hi")]),
+    ).toBe("planner");
+    expect(
+      await textOf(
+        makeModel(dir, "page_worker"),
+        [],
+        pageMessages("guide/intro"),
+      ),
+    ).toBe("page");
+  });
+
+  it("ignores an empty tool name and falls back to the role", async () => {
+    const dir = makeDir({
+      scripts: [{ workerKind: "qa", steps: [{ content: "qa" }] }],
+    });
+
+    expect(
+      await textOf(
+        makeModel(dir, "qa"),
+        [{ name: "" }],
+        [new HumanMessage("hi")],
+      ),
+    ).toBe("qa");
+  });
+});
+
+describe("scripted model fixture_missing details", () => {
+  it("reports the full key on an unknown key", async () => {
+    const dir = makeDir({
+      scripts: [{ workerKind: "lesson", steps: [{ content: "known" }] }],
+    });
+
+    const error = await capture(() =>
+      textOf(
+        makeModel(dir, "qa"),
+        [{ name: "submit_page" }],
+        pageMessages("guide/intro"),
+      ),
+    );
+    expect(error).toBeInstanceOf(LearningError);
+    const failure = error as LearningError;
+    expect(failure.code).toBe("internal_error");
+    expect(failure.details).toMatchObject({
+      reason: "fixture_missing",
+      workerKind: "page",
+      pagePath: "guide/intro",
+      promptTemplateVersion: VERSION,
+      occurrence: 1,
+    });
+  });
+
+  it("treats an entry with no steps as fixture_missing", async () => {
+    const dir = makeDir({
+      scripts: [{ workerKind: "qa", occurrence: 1, steps: [] }],
+    });
+
+    const error = await capture(() =>
+      textOf(makeModel(dir, "qa"), [], [new HumanMessage("q")]),
+    );
+    expect(error).toBeInstanceOf(LearningError);
+    expect((error as LearningError).code).toBe("internal_error");
+    expect((error as LearningError).details?.reason).toBe("fixture_missing");
+  });
+
+  it("reads the page path only from the system message", async () => {
+    const dir = makeDir({
+      scripts: [
+        {
+          workerKind: "page",
+          pagePath: "guide/intro",
+          steps: [{ content: "page" }],
+        },
+      ],
+    });
+
+    // The page is named in the human turn, not the system prompt: no page path
+    // is derived, so the page-key fixture cannot match.
+    const error = await capture(() =>
+      textOf(
+        makeModel(dir),
+        [{ name: "submit_page" }],
+        [
+          new SystemMessage("You write wiki pages."),
+          new HumanMessage("Write /openwiki/guide/intro.md."),
+        ],
+      ),
+    );
+    expect(error).toBeInstanceOf(LearningError);
+    expect((error as LearningError).details?.reason).toBe("fixture_missing");
+    expect((error as LearningError).details?.pagePath).toBeNull();
+  });
+
+  it("rejects an empty fixture directory at construction", () => {
+    expect(() =>
+      createScriptedModel({
+        dir: "   ",
+        role: "qa",
+        promptTemplateVersion: VERSION,
+      }),
+    ).toThrowError(LearningError);
+  });
+});
+
 describe("scripted model determinism", () => {
   it("produces an identical message sequence for identical input", async () => {
     const dir = makeDir({

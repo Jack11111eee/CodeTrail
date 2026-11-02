@@ -121,9 +121,46 @@ describe("createClock", () => {
     expect((error as LearningError).code).toBe("invalid_input");
   });
 
+  it("prefers an explicit fixed instant over CODETRAIL_NOW", () => {
+    process.env.CODETRAIL_NOW = "2024-06-01T00:00:00.000Z";
+    expect(createClock("2025-01-02T03:04:05.000Z").now().toISOString()).toBe(
+      "2025-01-02T03:04:05.000Z",
+    );
+  });
+
+  it("rejects an invalid set instant", () => {
+    const clock = createClock("2025-01-02T03:04:05.000Z");
+    expect(() => clock.set("not-a-date")).toThrowError(LearningError);
+    expect(clock.now().toISOString()).toBe("2025-01-02T03:04:05.000Z");
+  });
+
   it("rejects a non-finite advance", () => {
     const clock = createClock("2025-01-02T03:04:05.000Z");
     expect(() => clock.advance(Number.NaN)).toThrowError(LearningError);
+    expect(() => clock.advance(Number.POSITIVE_INFINITY)).toThrowError(
+      LearningError,
+    );
+  });
+
+  it("falls back to the live clock for a blank CODETRAIL_NOW", () => {
+    const before = Date.now();
+    process.env.CODETRAIL_NOW = "   ";
+    const clock = createClock();
+    expect(clock.now()).toBeInstanceOf(Date);
+    expect(clock.now().getTime()).toBeGreaterThanOrEqual(before);
+  });
+
+  it("ignores malformed runtime variables other than CODETRAIL_NOW", () => {
+    process.env.CODETRAIL_PORT = "abc";
+    process.env.CODETRAIL_WATCH_INTERVAL_MS = "nope";
+    try {
+      expect(createClock("2025-01-02T03:04:05.000Z").now().toISOString()).toBe(
+        "2025-01-02T03:04:05.000Z",
+      );
+    } finally {
+      delete process.env.CODETRAIL_PORT;
+      delete process.env.CODETRAIL_WATCH_INTERVAL_MS;
+    }
   });
 });
 
@@ -152,6 +189,32 @@ describe("faultPoint", () => {
 
   it("ignores a fault-name typo", () => {
     expect(runFaultChild("seal", "seel")).toBe(3);
+  });
+
+  it("is case-sensitive", () => {
+    expect(runFaultChild("seal", "SEAL")).toBe(3);
+    expect(runFaultChild("tx_before", "TX_BEFORE")).toBe(3);
+  });
+
+  it("treats a blank injected value as no fault", () => {
+    expect(runFaultChild("seal", "")).toBe(3);
+    expect(runFaultChild("seal", "   ")).toBe(3);
+  });
+
+  it("trims surrounding whitespace like the env parser", () => {
+    // `resolveEnv` trims every value it reads, so `CODETRAIL_FAULT_INJECT`
+    // inherits the same normalisation.
+    expect(runFaultChild("seal", " seal ")).toBe(1);
+    expect(runFaultChild("rename", "\trename\n")).toBe(1);
+  });
+
+  it("lists exactly the four publish fault points", () => {
+    expect([...FAULT_POINT_NAMES]).toEqual([
+      "seal",
+      "rename",
+      "tx_before",
+      "tx_after",
+    ]);
   });
 });
 
