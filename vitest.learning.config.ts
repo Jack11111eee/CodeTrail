@@ -11,6 +11,9 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     include: ["test/learning/**/*.test.ts"],
+    // Fail closed: every learning test runs behind the offline guard and with a
+    // per-test temporary CODETRAIL_DATA_DIR (architecture §17.5, issue-07).
+    setupFiles: ["test/learning/setup/guard.ts"],
     pool: "forks",
     testTimeout: 30000,
     sequence: {

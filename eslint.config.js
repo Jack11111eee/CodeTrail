@@ -3,9 +3,41 @@ import tseslint from "typescript-eslint";
 
 const TS_FILES = ["src/**/*.{ts,tsx}", "test/**/*.{ts,tsx}"];
 
+// Node's runtime globals for ESM scripts (`scripts/*.mjs`). Without these,
+// `no-undef` flags every `process`/`Buffer`/`fetch` reference in the fixture,
+// scanner, and toolchain scripts that run directly under Node.
+const NODE_GLOBALS = {
+  AbortController: "readonly",
+  AbortSignal: "readonly",
+  Buffer: "readonly",
+  TextDecoder: "readonly",
+  TextEncoder: "readonly",
+  URL: "readonly",
+  URLSearchParams: "readonly",
+  atob: "readonly",
+  btoa: "readonly",
+  clearImmediate: "readonly",
+  clearInterval: "readonly",
+  clearTimeout: "readonly",
+  console: "readonly",
+  fetch: "readonly",
+  global: "readonly",
+  globalThis: "readonly",
+  process: "readonly",
+  queueMicrotask: "readonly",
+  setImmediate: "readonly",
+  setInterval: "readonly",
+  setTimeout: "readonly",
+  structuredClone: "readonly",
+};
+
 export default tseslint.config(
   {
     ignores: [
+      // Generated fixture repositories (`pnpm run fixtures`) contain third-party
+      // and deliberately malformed source that is not ours to lint.
+      ".tmp/**",
+      "**/.tmp/**",
       "coverage/**",
       "dist/**",
       "node_modules/**",
@@ -31,6 +63,16 @@ export default tseslint.config(
   {
     files: ["**/*.js"],
     extends: [tseslint.configs.disableTypeChecked],
+  },
+  // ESM scripts (`scripts/*.mjs`) run directly under Node with ES module
+  // semantics and Node's runtime globals.
+  {
+    files: ["**/*.mjs"],
+    languageOptions: {
+      ecmaVersion: "latest",
+      sourceType: "module",
+      globals: NODE_GLOBALS,
+    },
   },
   // CommonJS scripts (e.g. the install-time environment check) run directly
   // under Node, so they need Node globals and CommonJS module semantics.
