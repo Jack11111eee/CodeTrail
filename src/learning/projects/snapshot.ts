@@ -21,6 +21,7 @@ import type {
   SnapshotRecord,
   SnapshotService,
 } from "../contracts/index.js";
+import { buildCoverageReport } from "./coverage.js";
 import { ensureObjectAvailable, mirrorExists } from "./mirror.js";
 import type { MirrorHandle } from "./mirror.js";
 import {
@@ -30,41 +31,11 @@ import {
   resolveRef,
   worktreeMatches,
 } from "./worktree.js";
-import type { TreeEntry } from "./worktree.js";
 
 // Declared in contracts (§3.11, §3.13, §3.10); re-export only.
 export type { SnapshotRecord, SnapshotService, CoverageReport };
 
 const SHA_PATTERN = /^[0-9a-f]{40}$/u;
-
-/**
- * The coverage report is assembled by `projects/coverage.ts`, which lands with
- * the read-scope slice of the same wave. The module is resolved at call time so
- * this file compiles and runs without it; nothing here re-derives exclusion or
- * completeness rules.
- */
-const COVERAGE_MODULE = "./coverage.js";
-
-interface CoverageInput {
-  generationId: GenerationId;
-  commitSha: string;
-  scope: NormalizedScope;
-  entries: TreeEntry[];
-  readBlob: (relPath: string) => Promise<string>;
-  status?: { uncommitted: string[]; untracked: string[] };
-}
-
-type CoverageBuilder = (input: CoverageInput) => Promise<CoverageReport>;
-
-async function loadCoverageBuilder(): Promise<CoverageBuilder> {
-  const loaded = (await import(COVERAGE_MODULE)) as {
-    buildCoverageReport?: CoverageBuilder;
-  };
-  if (typeof loaded.buildCoverageReport !== "function") {
-    throw new LearningError("internal_error", "覆盖报告模块不可用");
-  }
-  return loaded.buildCoverageReport;
-}
 
 export function createSnapshotService(deps: {
   paths: DataPaths;
@@ -151,7 +122,6 @@ export function createSnapshotService(deps: {
       scope: NormalizedScope,
       generationId: GenerationId,
     ): Promise<CoverageReport> {
-      const buildCoverageReport = await loadCoverageBuilder();
       const entries = await listTreeEntries(snap.worktreePath, snap.commitSha);
       const reader = createSnapshotReader(snap, scope);
       return buildCoverageReport({
@@ -159,7 +129,8 @@ export function createSnapshotService(deps: {
         commitSha: snap.commitSha,
         scope,
         entries,
-        // Only the LFS pointer header is inspected, never the whole file.
+        // The reader applies `assertReadable`; the report only ever inspects
+        // the first bytes (LFS pointer header / `.gitmodules` declarations).
         readBlob: async (relPath: string) =>
           (await reader.read(relPath)).slice(0, 512),
       });

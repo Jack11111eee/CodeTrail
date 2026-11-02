@@ -3,7 +3,7 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { normalizeScope } from "../../../src/learning/contracts/index.ts";
+import { normalizeScope } from "../../../src/learning/projects/scope.ts";
 import { catFileExists } from "../../../src/learning/projects/mirror.ts";
 import { createSnapshotService } from "../../../src/learning/projects/snapshot.ts";
 import {

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 
-import { normalizeScope } from "../../../src/learning/contracts/index.ts";
+import { normalizeScope } from "../../../src/learning/projects/scope.ts";
 import { git } from "../../../src/learning/projects/git.ts";
 import { createSnapshotService } from "../../../src/learning/projects/snapshot.ts";
 import { resolveRef } from "../../../src/learning/projects/worktree.ts";
