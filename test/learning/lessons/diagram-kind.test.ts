@@ -8,6 +8,8 @@ import {
   parseLesson,
 } from "../../../src/learning/lessons/schema.ts";
 import { assembleComponentDiagram } from "../../../src/learning/lessons/assemble.ts";
+import { validateStructural } from "../../../src/learning/lessons/validate/structural.ts";
+import { changeFixture, researchFixture } from "../helpers/lesson-context.ts";
 import {
   assembleInput,
   changeLesson,
@@ -141,5 +143,27 @@ describe("assembleComponentDiagram", () => {
       assembleInput({ coverage: emptyCoverage(["src/App.vue"]) }),
     );
     expect(diagram.kind).toBe("component");
+  });
+});
+
+/**
+ * The validator repeats the mapping check on the parsed lesson, so a model
+ * cannot pick a diagram kind outside its purpose's list.
+ */
+describe("validateStructural diagram kind", () => {
+  it("accepts the canonical component diagram", () => {
+    const { lesson, ctx } = researchFixture();
+    expect(validateStructural(lesson, ctx).ok).toBe(true);
+  });
+
+  it("rejects a component diagram on a change lesson", () => {
+    const { lesson, ctx } = changeFixture();
+    const broken = structuredClone(lesson);
+    broken.diagram.kind = "component";
+
+    const result = validateStructural(broken, ctx);
+
+    expect(result.ok).toBe(false);
+    expect(result.issues.map((entry) => entry.code)).toContain("diagram_kind");
   });
 });
