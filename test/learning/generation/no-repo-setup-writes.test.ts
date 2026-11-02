@@ -201,16 +201,22 @@ async function exists(absolutePath: string): Promise<boolean> {
  * survive. `CLAUDE.md` exists because upstream only refreshes that file when it
  * is already present; it never creates one.
  *
+ * @param options - `agentFiles: false` leaves `AGENTS.md`/`CLAUDE.md` out, so a
+ *   run that is allowed to write would have to *create* them.
  * @returns Absolute temporary repository root.
  */
-async function createRepository(): Promise<string> {
+async function createRepository(
+  options: { agentFiles?: boolean } = {},
+): Promise<string> {
   const root = await temporaryDirectory();
   await git(root, ["init", "--quiet"]);
   await git(root, ["config", "user.email", "test@example.com"]);
   await git(root, ["config", "user.name", "Fork Patch Test"]);
   await writeFile(path.join(root, "README.md"), "# Repository\n", "utf8");
-  await writeFile(path.join(root, "AGENTS.md"), HAND_WRITTEN_AGENTS, "utf8");
-  await writeFile(path.join(root, "CLAUDE.md"), HAND_WRITTEN_CLAUDE, "utf8");
+  if (options.agentFiles !== false) {
+    await writeFile(path.join(root, "AGENTS.md"), HAND_WRITTEN_AGENTS, "utf8");
+    await writeFile(path.join(root, "CLAUDE.md"), HAND_WRITTEN_CLAUDE, "utf8");
+  }
   await mkdir(path.join(root, "openwiki"), { recursive: true });
   await writeFile(
     path.join(root, "openwiki", "quickstart.md"),
@@ -321,6 +327,31 @@ describe("ensureCodeModeRepoSetup writeRepoFiles", () => {
       }
     },
   );
+
+  test("writeRepoFiles: false skips marker validation that upstream would reject", async () => {
+    // Upstream refuses to touch a file with a half-written managed marker pair.
+    // A read-only run must not fail on a file it is not allowed to write.
+    const root = await temporaryDirectory();
+    await writeFile(
+      path.join(root, "AGENTS.md"),
+      `${SNIPPET_START}\n\n## OpenWiki\n`,
+      "utf8",
+    );
+    const before = await snapshotAnalysedTree(root);
+
+    await expect(ensureCodeModeRepoSetup(root)).rejects.toThrow(
+      /malformed or duplicated/u,
+    );
+    await expect(
+      ensureCodeModeRepoSetup(root, {
+        createWorkflow: true,
+        writeRepoFiles: false,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(await snapshotAnalysedTree(root)).toEqual(before);
+    expect(await exists(path.join(root, ".github"))).toBe(false);
+  });
 });
 
 describe("beginRepositoryRun writeRepoFiles", () => {
@@ -378,6 +409,59 @@ describe("beginRepositoryRun writeRepoFiles", () => {
     );
   });
 
+  test("init with writeRepoFiles: false creates no agent files on a clean repository", async () => {
+    // The previous tests start from hand-written files, so they only prove the
+    // files are not *refreshed*. AC-GEN-16 also forbids *creating* them, which
+    // upstream would do (AGENTS.md) on a repository that has neither file.
+    const root = await createRepository({ agentFiles: false });
+    const before = await snapshotAnalysedTree(root);
+
+    const result = await beginRepositoryRun({
+      root,
+      mode: "init",
+      writeRepoFiles: false,
+      actor: ACTOR,
+    });
+
+    expect("run" in result).toBe(true);
+    expect(diffSnapshots(before, await snapshotAnalysedTree(root))).toEqual({
+      added: [],
+      removed: [],
+      changed: [],
+    });
+    expect(await exists(path.join(root, ".github"))).toBe(false);
+    for (const file of AGENT_FILES) {
+      expect(await exists(path.join(root, file))).toBe(false);
+    }
+  });
+
+  test("a proven no-op update with writeRepoFiles: false still adds nothing", async () => {
+    // The setup runs before the no-op check, so the skipped path must be just
+    // as read-only as a real update.
+    const root = await createRepository();
+    const before = await snapshotAnalysedTree(root);
+
+    const result = await beginRepositoryRun({
+      root,
+      mode: "update",
+      writeRepoFiles: false,
+      actor: ACTOR,
+    });
+
+    expect(result).toMatchObject({
+      view: { status: "noop", updatePreflight: { shouldSkip: true } },
+    });
+    expect(diffSnapshots(before, await snapshotAnalysedTree(root))).toEqual({
+      added: [],
+      removed: [],
+      changed: [],
+    });
+    expect(await exists(path.join(root, WORKFLOW_PATH))).toBe(false);
+    expect(await readFile(path.join(root, "AGENTS.md"), "utf8")).toBe(
+      HAND_WRITTEN_AGENTS,
+    );
+  });
+
   test("init with the option omitted keeps writing the workflow and agent files", async () => {
     const root = await createRepository();
 
@@ -429,6 +513,22 @@ describe("beginRepositoryRun writeRepoFiles", () => {
       mode: "init",
       writeRepoFiles: false,
     });
+  });
+
+  test("runNativeRepositoryGeneration leaves writeRepoFiles undefined when omitted", async () => {
+    // The upstream-preserving default must survive the top entry point too, not
+    // just `ensureCodeModeRepoSetup`.
+    const root = path.join(await temporaryDirectory(), "missing");
+
+    await runNativeRepositoryGeneration({
+      root,
+      mode: "init",
+      modelId: "test-model",
+      model: {} as unknown as BaseChatModel,
+    }).catch(() => undefined);
+
+    expect(beginCalls).toHaveLength(1);
+    expect(beginCalls[0].writeRepoFiles).toBeUndefined();
   });
 });
 
