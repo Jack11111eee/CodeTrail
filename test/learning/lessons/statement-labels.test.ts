@@ -129,6 +129,40 @@ describe("statement labels", () => {
     expect(result.issues[0]?.code).toBe("copy");
   });
 
+  // Built at runtime, like `FORBIDDEN_COPY`, so the copy scanner stays clean.
+  const FORBIDDEN_PHRASES = [
+    ["已证明", "全部正确"].join(""),
+    ["proven ", "correct"].join(""),
+    ["100% ", "正确"].join(""),
+  ] as const;
+
+  it.each(FORBIDDEN_PHRASES)("rejects the overclaiming phrase %s", (phrase) => {
+    const { lesson, ctx } = researchFixture();
+    const broken = structuredClone(lesson);
+    broken.scenario = {
+      ...broken.scenario,
+      observableResult: `结果为 ${phrase}。`,
+    };
+
+    const result = validateLabels(broken, ctx);
+
+    expect(result.ok).toBe(false);
+    expect(result.issues[0]?.code).toBe("copy");
+    expect(result.issues[0]?.path).toBe("scenario");
+  });
+
+  it("rejects overclaiming copy in a diagram label", () => {
+    const { lesson, ctx } = researchFixture();
+    const broken = structuredClone(lesson);
+    broken.diagram.nodes[0].label = `${["proven ", "correct"].join("")} 模块`;
+
+    const result = validateLabels(broken, ctx);
+
+    expect(result.ok).toBe(false);
+    expect(result.issues[0]?.code).toBe("copy");
+    expect(result.issues[0]?.path).toContain("diagram.nodes");
+  });
+
   it("requires the scenario to be explicitly labelled as an example", () => {
     const { lesson, ctx } = researchFixture();
     const broken = structuredClone(lesson) as unknown as Record<string, unknown>;

@@ -508,6 +508,9 @@ export function changeFixture(): ChangeFixture {
     string,
     unknown
   >;
+  // AC-UPD-27: the canonical change lesson has no unverified effects, so the
+  // fixture explains the empty field itself instead of every test patching it.
+  raw.omittedReasons = { unverifiedEffects: "没有观察到未验证的影响" };
   raw.diagram = {
     kind: "timeline",
     mermaid: "timeline\n  section 版本\n  旧字段 -> 新字段",

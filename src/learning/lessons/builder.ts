@@ -26,12 +26,19 @@ import type {
   CheckStatus,
   ClaimView,
   CoverageReport,
+  DiffEntry,
+  DiffResult,
   EvidenceCatalogEntry,
   GenerationConfig,
+  GenerationId,
   Lesson,
   LessonChecks,
   ModelHandle,
+  NormalizedScope,
+  RepoId,
+  RequiredLessonGroup,
   SemanticRepairFn,
+  SnapshotReader,
   SourceRef,
   SourceRegistry,
   StagedGenerationRef,
@@ -171,12 +178,55 @@ function isRegistryInternals(
   return typeof (registry as Partial<SourceRegistryInternals>).recordGap === "function";
 }
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Registers one whole-file repo source. A failure is recorded as a source gap
+ * rather than silently dropped, so the catalog and the coverage report agree on
+ * what could not be read.
+ */
+async function registerRepoSource(
+  registry: SourceRegistry,
+  generationId: GenerationId,
+  repoId: RepoId,
+  commitSha: string,
+  relPath: string,
+  snapshot: SnapshotReader,
+  scope: NormalizedScope,
+): Promise<boolean> {
+  try {
+    await registry.registerRepo({
+      generationId,
+      repoId,
+      commitSha,
+      path: relPath,
+      lines: null,
+      snapshot,
+      scope,
+    });
+    return true;
+  } catch (error) {
+    if (isRegistryInternals(registry)) {
+      registry.recordGap(generationId, {
+        kind: "repo",
+        status: "source_missing",
+        subject: relPath,
+        reason: errorMessage(error),
+      });
+    }
+    return false;
+  }
+}
+
 /** Registers every `repo://` resource a claim cites, reading the snapshot. */
 async function registerClaimSources(
   claims: readonly ClaimView[],
   input: BuildLessonsInput,
-): Promise<void> {
+): Promise<number> {
   const seen = new Set<string>();
+  let registered = 0;
 
   for (const claim of claims) {
     for (const evidence of claim.evidence) {
@@ -196,37 +246,139 @@ async function registerClaimSources(
           snapshot: input.snapshot,
           scope: input.scope,
         });
+        registered += 1;
       } catch (error) {
         if (isRegistryInternals(input.registry)) {
           input.registry.recordGap(input.generation.generationId, {
             kind: "repo",
             status: "source_missing",
             subject: parsed.path,
-            reason: error instanceof Error ? error.message : String(error),
+            reason: errorMessage(error),
           });
         }
       }
     }
   }
+
+  return registered;
 }
 
-function safeAll(registry: SourceRegistry, generationId: string): SourceRef[] {
+interface DiffSourceSides {
+  generationId: GenerationId;
+  registry: SourceRegistry;
+  scope: NormalizedScope;
+  diff: DiffResult;
+  head: {
+    repoId: RepoId;
+    commitSha: string;
+    snapshot: SnapshotReader;
+  };
+  base: {
+    repoId: RepoId;
+    commitSha: string;
+    snapshot: SnapshotReader;
+  } | null;
+  /** Which entry statuses are registered against the base snapshot. */
+  baseStatuses: ReadonlySet<DiffEntry["status"]>;
+}
+
+const DELETED_ONLY: ReadonlySet<DiffEntry["status"]> = new Set(["D"]);
+const ALL_NON_ADDED: ReadonlySet<DiffEntry["status"]> = new Set([
+  "M",
+  "R",
+  "D",
+]);
+
+/**
+ * Stages the diff's paths as evidence sources: additions/modifications/renames
+ * against the head snapshot, deletions (and the old side of a rename) against
+ * the base snapshot when one is available. Returns the number of refs staged.
+ */
+async function registerDiffSources(sides: DiffSourceSides): Promise<number> {
+  let registered = 0;
+
+  for (const entry of sides.diff.entries) {
+    if (entry.status !== "D") {
+      const ok = await registerRepoSource(
+        sides.registry,
+        sides.generationId,
+        sides.head.repoId,
+        sides.head.commitSha,
+        entry.path,
+        sides.head.snapshot,
+        sides.scope,
+      );
+      if (ok) registered += 1;
+    }
+
+    if (sides.base !== null && sides.baseStatuses.has(entry.status)) {
+      const basePath =
+        entry.status === "D" || entry.status === "R"
+          ? entry.oldPath ?? entry.path
+          : entry.path;
+      const ok = await registerRepoSource(
+        sides.registry,
+        sides.generationId,
+        sides.base.repoId,
+        sides.base.commitSha,
+        basePath,
+        sides.base.snapshot,
+        sides.scope,
+      );
+      if (ok) registered += 1;
+    }
+  }
+
+  return registered;
+}
+
+/**
+ * The registry's read side throws when no staging bucket exists for a staged
+ * generation (the real registry asserts publication). That is only a genuine
+ * empty lookup when nothing was staged; any other error — including a failed
+ * guard after we did stage refs — is a real failure and must surface.
+ */
+function safeAll(
+  registry: SourceRegistry,
+  generationId: string,
+  stagedCount: number,
+): SourceRef[] {
   try {
     return registry.all(generationId as Parameters<typeof registry.all>[0]);
-  } catch {
-    return [];
+  } catch (error) {
+    if (
+      stagedCount === 0 &&
+      error instanceof LearningError &&
+      error.code === "unpublished_generation"
+    ) {
+      return [];
+    }
+    throw error;
   }
 }
 
 async function catalogFor(
   input: BuildLessonsInput,
   services: BuildLessonServices,
+  baseSnapshot: SnapshotReader | null = null,
+  stagedCount = 0,
 ): Promise<EvidenceCatalogEntry[]> {
-  const refs = safeAll(input.registry, input.generation.generationId);
+  const refs = safeAll(
+    input.registry,
+    input.generation.generationId,
+    stagedCount,
+  );
   if (refs.length === 0) return [];
 
   const reader = createSourceReader({
-    snapshotFor: () => input.snapshot,
+    snapshotFor: (commitSha) => {
+      if (input.snapshot.commitSha === commitSha) return input.snapshot;
+      if (baseSnapshot !== null && baseSnapshot.commitSha === commitSha) {
+        return baseSnapshot;
+      }
+      // `readRepo` re-checks the commit and drops a mismatched ref.
+      return input.snapshot;
+    },
     external: input.external,
   });
 
@@ -411,6 +563,37 @@ export interface EvaluatedLesson {
   issues: ValidationIssue[];
 }
 
+/** Maps a validator issue path onto the schema group that owns it. */
+function groupForIssue(issue: ValidationIssue): RequiredLessonGroup {
+  const first = (issue.path ?? "").split(".")[0] ?? "";
+  switch (first) {
+    case "context":
+      return "context";
+    case "scenario":
+      return "scenario";
+    case "overview":
+      return "overview";
+    case "plainExplanation":
+      return "plainExplanation";
+    case "technicalExplanation":
+      return "technicalExplanation";
+    case "choices":
+    case "choicesOmittedReason":
+      return "choices";
+    case "boundaries":
+      return "boundaries";
+    case "statements":
+      return "statements";
+    case "evidence":
+    case "coverageGaps":
+      return "evidence";
+    case "diagram":
+      return "diagram";
+    default:
+      return "statements";
+  }
+}
+
 const DIAGRAM_STRUCTURAL_CODES: ReadonlySet<string> = new Set([
   "diagram_mermaid",
   "diagram_kind",
@@ -426,17 +609,47 @@ function statusOf(ok: boolean): CheckStatus {
 /**
  * Runs the full validator chain over one lesson. Exported so tests and the
  * publish gate can inspect `checks` before a failed lesson is dropped.
+ *
+ * The semantic pass may replace teaching fields (a targeted repair or the
+ * deterministic downgrade). Structural, evidence, label and diagram checks are
+ * therefore re-run over the final lesson: a repair may not smuggle in a wrong
+ * diagram kind, forbidden copy, unregistered id or empty `coverageGaps`.
  */
 export async function evaluateLesson(
   lesson: AnyLesson,
   ctx: ValidationContext,
   repair: SemanticRepairFn,
 ): Promise<EvaluatedLesson> {
-  const structural = validateStructural(lesson, ctx);
-  const evidence = await validateEvidence(lesson, ctx);
-  const labels = validateLabels(lesson, ctx);
-  const diagram = await validateDiagram(lesson, ctx);
+  const initialStructural = validateStructural(lesson, ctx);
+  const initialEvidence = await validateEvidence(lesson, ctx);
+  const initialLabels = validateLabels(lesson, ctx);
+  const initialDiagram = await validateDiagram(lesson, ctx);
   const semantic = await validateSemantic(lesson, ctx, repair);
+
+  const finalLesson = semantic.lesson;
+  const repaired = finalLesson !== lesson;
+  const structural = repaired
+    ? validateStructural(finalLesson, ctx)
+    : initialStructural;
+
+  let evidence;
+  let labels;
+  let diagram;
+  if (repaired && !structural.ok) {
+    // A repair may return a malformed lesson. The structural (schema) gate
+    // already rejected it, so never read its fields from the other validators.
+    evidence = { ok: false, issues: [] };
+    labels = { ok: true, issues: [] };
+    diagram = { ok: true, issues: [] };
+  } else if (repaired) {
+    evidence = await validateEvidence(finalLesson, ctx);
+    labels = validateLabels(finalLesson, ctx);
+    diagram = await validateDiagram(finalLesson, ctx);
+  } else {
+    evidence = initialEvidence;
+    labels = initialLabels;
+    diagram = initialDiagram;
+  }
 
   const diagramStructural = diagram.issues.filter((entry) =>
     DIAGRAM_STRUCTURAL_CODES.has(entry.code),
@@ -461,7 +674,7 @@ export async function evaluateLesson(
   };
 
   return {
-    lesson: semantic.lesson,
+    lesson: finalLesson,
     checks,
     issues: [
       ...structural.issues,
@@ -550,6 +763,26 @@ async function runFlow(flow: BuildFlow): Promise<BuildLessonsResult> {
   const evaluated = await evaluateLesson(parsed.lesson, flow.ctx, repair);
   if (lessonPublishable(evaluated.checks)) {
     lessons.push(evaluated.lesson);
+  } else {
+    // A dropped lesson must stay explainable: map the gate's issues onto the
+    // schema's structural-failure groups instead of losing them.
+    failures.push({
+      lessonIdHint: evaluated.lesson.lessonId,
+      failures:
+        evaluated.issues.length === 0
+          ? [
+              {
+                group: "statements",
+                path: "",
+                message: "lesson failed the publish gate",
+              },
+            ]
+          : evaluated.issues.map((entry) => ({
+              group: groupForIssue(entry),
+              path: entry.path ?? "",
+              message: entry.message,
+            })),
+    });
   }
 
   return finish(lessons, failures);
@@ -629,7 +862,7 @@ async function runResearch(
     }
   }
 
-  await registerClaimSources(claims, input);
+  const staged = await registerClaimSources(claims, input);
 
   const skeletonInput = researchInput(
     input,
@@ -638,7 +871,7 @@ async function runResearch(
     input.coverage,
     services,
   );
-  const catalog = await catalogFor(input, services);
+  const catalog = await catalogFor(input, services, null, staged);
   skeletonInput.catalog = catalog;
 
   return runFlow(skeletonInput);
@@ -700,7 +933,10 @@ function changeFlow(
       coverage,
       mermaid: services.mermaid ?? createUpstreamMermaidPort(),
       isUiProject: isUiProject(coverage.analyzed),
-      allowedCommitShas: [input.generation.commitSha],
+      allowedCommitShas:
+        input.baseSnapshot === null
+          ? [input.generation.commitSha]
+          : [input.generation.commitSha, input.baseSnapshot.commitSha],
     },
     catalog: [],
     identity: (lessonIdHint: string) =>
@@ -725,7 +961,34 @@ export async function buildChangeLesson(
   services: BuildLessonServices = {},
 ): Promise<BuildLessonsResult> {
   const flow = changeFlow(input, services);
-  flow.catalog = await catalogFor(flow.input, services);
+  // The evidence catalog is assembled from the diff itself: the model may only
+  // cite ids we staged, so registration has to happen before `catalogFor`.
+  const staged = await registerDiffSources({
+    generationId: input.generation.generationId,
+    registry: input.registry,
+    scope: input.scope,
+    diff: input.diff,
+    head: {
+      repoId: input.headSnapshot.repoId,
+      commitSha: input.generation.commitSha,
+      snapshot: input.headSnapshot,
+    },
+    base:
+      input.baseSnapshot === null
+        ? null
+        : {
+            repoId: input.baseSnapshot.repoId,
+            commitSha: input.baseSnapshot.commitSha,
+            snapshot: input.baseSnapshot,
+          },
+    baseStatuses: DELETED_ONLY,
+  });
+  flow.catalog = await catalogFor(
+    flow.input,
+    services,
+    input.baseSnapshot,
+    staged,
+  );
   return runFlow(flow);
 }
 
@@ -803,8 +1066,8 @@ function comparisonFlow(
       coverageGaps: coverageGapsOf(coverage),
     }),
     extra: {
-      baseGenerationId: null,
-      headGenerationId: null,
+      baseGenerationId: input.base.generationId,
+      headGenerationId: input.head.generationId,
     },
   };
 }
@@ -815,7 +1078,31 @@ export async function buildComparisonLesson(
   services: BuildLessonServices = {},
 ): Promise<BuildLessonsResult> {
   const flow = comparisonFlow(input, services);
-  flow.catalog = await catalogFor(flow.input, services);
+  // Both sides are staged as evidence before the catalog is built: a
+  // comparison lesson cites base and head commits independently.
+  const staged = await registerDiffSources({
+    generationId: input.generation.generationId,
+    registry: input.registry,
+    scope: input.scope,
+    diff: input.diff,
+    head: {
+      repoId: input.headSnapshot.repoId,
+      commitSha: input.head.commitSha,
+      snapshot: input.headSnapshot,
+    },
+    base: {
+      repoId: input.baseSnapshot.repoId,
+      commitSha: input.base.commitSha,
+      snapshot: input.baseSnapshot,
+    },
+    baseStatuses: ALL_NON_ADDED,
+  });
+  flow.catalog = await catalogFor(
+    flow.input,
+    services,
+    input.baseSnapshot,
+    staged,
+  );
   return runFlow(flow);
 }
 

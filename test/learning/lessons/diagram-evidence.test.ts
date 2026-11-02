@@ -53,6 +53,42 @@ describe("diagram evidence", () => {
     expect(bindNodeEvidence(lesson.diagram.nodes[0], ctx).ok).toBe(true);
   });
 
+  it("rejects an edge whose evidence id is not registered", async () => {
+    const { lesson, ctx } = researchFixture();
+    const broken = structuredClone(lesson);
+    broken.diagram.edges = [
+      {
+        from: "n1",
+        to: "n1",
+        label: "自引用",
+        evidenceIds: ["s_notregistered00000" as SourceId],
+        inferred: false,
+      },
+    ];
+
+    const result = await validateDiagram(broken, ctx);
+
+    expect(result.ok).toBe(false);
+    expect(result.issues[0]?.code).toBe("diagram_evidence");
+    expect(result.issues[0]?.message).toContain("not registered");
+  });
+
+  it("accepts an inferred edge that cites no evidence", async () => {
+    const { lesson, ctx } = researchFixture();
+    const inferred = structuredClone(lesson);
+    inferred.diagram.edges = [
+      {
+        from: "n1",
+        to: "n1",
+        label: "可能",
+        evidenceIds: [],
+        inferred: true,
+      },
+    ];
+
+    expect((await validateDiagram(inferred, ctx)).ok).toBe(true);
+  });
+
   it("exposes inferred edges and planned/demo nodes in toRenderData", () => {
     const { lesson } = researchFixture();
     const withFlags = structuredClone(lesson);

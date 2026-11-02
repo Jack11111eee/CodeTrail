@@ -49,4 +49,24 @@ describe("diagram mermaid", () => {
       "diagram_mermaid",
     );
   });
+
+  it("rejects an empty mermaid body without calling the port", async () => {
+    const { lesson, ctx } = researchFixture();
+    let called = 0;
+    const spyPort = {
+      validate: () => {
+        called += 1;
+        return Promise.resolve({ ok: true as const, mode: "heuristic" as const });
+      },
+    };
+    const broken = structuredClone(lesson);
+    broken.diagram.mermaid = "   ";
+
+    const result = await validateDiagram(broken, { ...ctx, mermaid: spyPort });
+
+    expect(result.ok).toBe(false);
+    expect(result.issues[0]?.code).toBe("diagram_mermaid");
+    expect(result.issues[0]?.message).toContain("no mermaid body");
+    expect(called).toBe(0);
+  });
 });

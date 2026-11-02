@@ -46,4 +46,23 @@ describe("choices", () => {
     expect(result.issues[0]?.code).toBe("choices");
     expect(result.issues[0]?.message).toContain("evidence");
   });
+
+  it.each(["whenItFits", "cost"] as const)(
+    "rejects an alternative whose %s is blank",
+    (field) => {
+      const { lesson, ctx } = researchFixture();
+      const broken = structuredClone(lesson);
+      (broken.choices[0].alternatives[0] as unknown as Record<string, unknown>)[
+        field
+      ] = "   ";
+
+      const result = validateStructural(broken, ctx);
+
+      expect(result.ok).toBe(false);
+      expect(result.issues.map((entry) => entry.code)).toContain("choices");
+      expect(result.issues.some((entry) => entry.message.includes(field))).toBe(
+        true,
+      );
+    },
+  );
 });

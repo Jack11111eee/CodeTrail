@@ -9,6 +9,7 @@ import {
   buildResearchLessons,
   publishVerdict,
 } from "../../../src/learning/lessons/builder.ts";
+import { validateStructural } from "../../../src/learning/lessons/validate/structural.ts";
 import {
   EMPTY_CLAIMS,
   cleanupScripts,
@@ -126,7 +127,9 @@ describe("publish gating", () => {
   it("drops a lesson whose evidence check failed", async () => {
     const fixture = researchFixture();
     const broken = structuredClone(fixture.lesson);
-    broken.statements[0].evidenceIds = ["s_neverregistered0000" as never];
+    // An unregistered id on a choice survives the semantic downgrade, so the
+    // evidence gate is what must drop the lesson.
+    broken.choices[0].evidenceIds = ["s_neverregistered0000" as never];
 
     const dir = scriptDir([lessonEntry(broken)]);
     const model = scriptedHandle(dir);
@@ -138,5 +141,29 @@ describe("publish gating", () => {
 
     expect(result.lessons).toEqual([]);
     expect(result.blankTeaching).toBe(true);
+  });
+
+  it("rejects incomplete coverage with no coverageGaps", () => {
+    const fixture = researchFixture();
+    const result = validateStructural(fixture.lesson, {
+      ...fixture.ctx,
+      coverage: partialCoverage("src/index.ts"),
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.issues.map((entry) => entry.code)).toContain("coverage");
+  });
+
+  it("accepts incomplete coverage when coverageGaps is non-empty", () => {
+    const fixture = researchFixture();
+    const lesson = structuredClone(fixture.lesson);
+    lesson.coverageGaps = ["assets/logo.png: excluded_binary"];
+
+    const result = validateStructural(lesson, {
+      ...fixture.ctx,
+      coverage: partialCoverage("src/index.ts"),
+    });
+
+    expect(result.ok).toBe(true);
   });
 });

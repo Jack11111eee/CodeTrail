@@ -5,6 +5,7 @@ import { validateEvidence } from "../../../src/learning/lessons/validate/evidenc
 import type { AnyLesson } from "../../../src/learning/lessons/schema.ts";
 import {
   comparisonFixture,
+  externalRef,
   repoRef,
 } from "../helpers/lesson-context.ts";
 import { OTHER_HEAD_SHA } from "../helpers/lesson-sample.ts";
@@ -81,5 +82,36 @@ describe("comparison evidence", () => {
     expect(result.issues.map((entry) => entry.code)).toContain(
       "evidence_compare",
     );
+  });
+
+  it("rejects an unversioned external source", async () => {
+    const { lesson, ctx, registry } = comparisonFixture();
+    const unversioned = externalRef({
+      title: "Unversioned design note",
+      url: "https://example.test/unversioned",
+      version: "",
+    });
+    registry.add(ctx.generation.generationId, unversioned);
+
+    const broken = structuredClone(lesson);
+    broken.statements.push({
+      id: "st3",
+      label: "engineering_analysis",
+      text: "外部资料说明了旧行为。",
+      evidenceIds: [unversioned.sourceId],
+      side: "head",
+    });
+
+    const result = await validateEvidence(broken, ctx);
+
+    expect(result.ok).toBe(false);
+    expect(result.issues.map((entry) => entry.code)).toContain(
+      "evidence_compare",
+    );
+    expect(
+      result.issues.some((entry) =>
+        entry.message.includes("version or retrieval time"),
+      ),
+    ).toBe(true);
   });
 });

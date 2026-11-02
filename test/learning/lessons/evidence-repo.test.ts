@@ -84,6 +84,46 @@ describe("repository evidence", () => {
     expect(result.issues[0]?.message).toContain("content_hash");
   });
 
+  it.each([
+    ["a zero start line", { start: 0, end: 1 }],
+    ["an inverted range", { start: 2, end: 1 }],
+  ] as const)("rejects %s", async (_label, lines) => {
+    const { lesson, ctx, registry, ref } = researchFixture();
+    const invalidRange = repoRef({
+      path: "src/index.ts",
+      text: "export const slugify = 1;",
+      lines,
+      generationId: ctx.generation.generationId,
+    });
+    registry.add(ctx.generation.generationId, invalidRange);
+    const broken = remap(lesson, ref.sourceId, invalidRange.sourceId);
+
+    const result = await validateEvidence(broken, ctx);
+
+    expect(result.ok).toBe(false);
+    expect(result.issues[0]?.code).toBe("evidence_repo");
+    expect(result.issues[0]?.message).toContain("line range");
+  });
+
+  it("rejects a whole-file hash mismatch when the ref has no line range", async () => {
+    const { lesson, ctx, registry, ref } = researchFixture();
+    const drifted = repoRef({
+      path: "src/index.ts",
+      text: "export const slugify = 1;",
+      lines: null,
+      generationId: ctx.generation.generationId,
+      contentHash: "sha256:deadbeef",
+    });
+    registry.add(ctx.generation.generationId, drifted);
+    const broken = remap(lesson, ref.sourceId, drifted.sourceId);
+
+    const result = await validateEvidence(broken, ctx);
+
+    expect(result.ok).toBe(false);
+    expect(result.issues[0]?.code).toBe("evidence_repo");
+    expect(result.issues[0]?.message).toContain("content_hash");
+  });
+
   it("rejects an evidence id that was never registered", async () => {
     const { lesson, ctx, ref } = researchFixture();
     const broken = remap(

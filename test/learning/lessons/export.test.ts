@@ -6,7 +6,7 @@ import {
   lessonToMarkdown,
   parseMarkdownBack,
 } from "../../../src/learning/lessons/export.ts";
-import { researchFixture } from "../helpers/lesson-context.ts";
+import { changeFixture, researchFixture } from "../helpers/lesson-context.ts";
 
 function expectedEvidenceIds(lesson: AnyLesson): SourceId[] {
   const ids: string[] = [...lesson.evidence];
@@ -20,6 +20,11 @@ function expectedEvidenceIds(lesson: AnyLesson): SourceId[] {
   for (const boundary of lesson.boundaries) ids.push(...boundary.evidenceIds);
   for (const node of lesson.diagram.nodes) ids.push(...node.evidenceIds);
   for (const edge of lesson.diagram.edges) ids.push(...edge.evidenceIds);
+  if (lesson.kind === "change") {
+    for (const alternative of lesson.alternatives) {
+      ids.push(...alternative.evidenceIds);
+    }
+  }
   return [...new Set(ids)].sort() as SourceId[];
 }
 
@@ -59,5 +64,15 @@ describe("Markdown export", () => {
 
     expect(back.evidenceIds).toContain(foreign);
     expect(back.evidenceIds).toEqual(expectedEvidenceIds(withForeign));
+  });
+
+  it("round-trips a change lesson including alternative evidence", () => {
+    const { lesson, ref } = changeFixture();
+
+    const markdown = lessonToMarkdown(lesson, [ref]);
+    const back = parseMarkdownBack(markdown);
+
+    expect(back.mechanismIds).toEqual(["m1"]);
+    expect(back.evidenceIds).toEqual(expectedEvidenceIds(lesson));
   });
 });

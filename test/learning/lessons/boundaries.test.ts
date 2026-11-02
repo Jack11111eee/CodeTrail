@@ -96,4 +96,38 @@ describe("boundaries", () => {
     expect(result.issues[0]?.code).toBe("boundaries");
     expect(result.issues[0]?.message).toContain("design-document");
   });
+
+  it("limits the status to the four documented values", () => {
+    const { lesson, ctx } = researchFixture();
+    const broken = structuredClone(lesson);
+    (broken.boundaries[0] as unknown as Record<string, unknown>).status =
+      "shipped";
+
+    const result = validateStructural(broken, ctx);
+
+    expect(result.ok).toBe(false);
+    expect(result.issues[0]?.code).toBe("boundaries");
+    expect(result.issues[0]?.message).toContain("status");
+  });
+
+  it("accepts demo and unknown boundaries without asserting they are real", () => {
+    const { lesson, ctx } = researchFixture();
+    const valid = structuredClone(lesson);
+    valid.boundaries = [
+      {
+        item: "桌面客户端",
+        status: "demo",
+        limits: "只有演示界面",
+        evidenceIds: [],
+      },
+      {
+        item: "离线缓存",
+        status: "unknown",
+        limits: "没有找到实现或设计文档",
+        evidenceIds: [],
+      },
+    ];
+
+    expect(validateStructural(valid, ctx).ok).toBe(true);
+  });
 });
