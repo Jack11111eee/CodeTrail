@@ -14,24 +14,11 @@
 
 import { randomUUID } from "node:crypto";
 import type { Dirent } from "node:fs";
-import {
-  chmod,
-  mkdir,
-  readFile,
-  readdir,
-  realpath,
-  rm,
-  stat,
-} from "node:fs/promises";
+import { chmod, mkdir, readFile, readdir, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
 import { stagingPath, stagingTreePath, worktreePath } from "../config/paths.js";
-import {
-  assertReadable,
-  classifyPath,
-  isReadable,
-} from "../contracts/index.js";
 import { LearningError } from "../contracts/index.js";
 import type {
   DataPaths,
@@ -43,6 +30,7 @@ import type {
 } from "../contracts/index.js";
 import { git } from "./git.js";
 import type { MirrorHandle } from "./mirror.js";
+import { assertReadable, classifyPath } from "./scope.js";
 
 export interface WorktreeHandle {
   repoId: RepoId;
@@ -402,72 +390,16 @@ export async function assertTreeUnchanged(
   }
 }
 
-function resolveInside(root: string, relPath: string): string {
-  if (
-    typeof relPath !== "string" ||
-    relPath === "" ||
-    relPath.includes("\0") ||
-    path.isAbsolute(relPath)
-  ) {
-    throw new LearningError("out_of_scope_path", "路径超出允许范围", {
-      path: relPath,
-    });
-  }
-  if (relPath.split(/[\\/]+/u).some((segment) => segment === "..")) {
-    throw new LearningError("out_of_scope_path", "路径超出允许范围", {
-      path: relPath,
-    });
-  }
-  const resolved = path.resolve(root, relPath);
-  const relative = path.relative(root, resolved);
-  if (
-    relative === "" ||
-    relative === ".." ||
-    relative.startsWith(`..${path.sep}`) ||
-    path.isAbsolute(relative)
-  ) {
-    throw new LearningError("out_of_scope_path", "路径超出允许范围", {
-      path: relPath,
-    });
-  }
-  return resolved;
-}
-
-async function assertNoSymlinkEscape(
-  root: string,
-  absolute: string,
-  relPath: string,
-): Promise<void> {
-  let realRoot: string;
-  let realCandidate: string;
-  try {
-    realRoot = await realpath(root);
-    realCandidate = await realpath(absolute);
-  } catch {
-    // The path does not exist; the caller's read reports `not_found`.
-    return;
-  }
-  const relative = path.relative(realRoot, realCandidate);
-  if (
-    relative === ".." ||
-    relative.startsWith(`..${path.sep}`) ||
-    path.isAbsolute(relative)
-  ) {
-    throw new LearningError("out_of_scope_path", "路径超出允许范围", {
-      path: relPath,
-      reason: "symlink_escape",
-    });
-  }
-}
-
 function notFound(relPath: string): LearningError {
   return new LearningError("not_found", "文件不存在", { path: relPath });
 }
 
 /**
- * Binds a snapshot to a read scope. Reads pass through `assertReadable` (the
- * single choke point) and the realpath containment check; enumeration uses
- * `git ls-tree` so untracked files are invisible by construction.
+ * Binds a snapshot to a read scope. Reads and slices pass through
+ * `assertReadable` with the worktree root, so `..`, absolute paths,
+ * out-of-scope paths and symlink escapes all fail before a file is opened;
+ * enumeration uses `git ls-tree` so untracked files are invisible by
+ * construction.
  */
 export function createSnapshotReader(
   record: SnapshotRecord,
@@ -476,11 +408,9 @@ export function createSnapshotReader(
   const root = record.worktreePath;
 
   async function read(relPath: string): Promise<string> {
-    assertReadable(relPath, scope);
-    const absolute = resolveInside(root, relPath);
-    await assertNoSymlinkEscape(root, absolute, relPath);
+    assertReadable(relPath, scope, root);
     try {
-      return await readFile(absolute, "utf8");
+      return await readFile(path.resolve(root, relPath), "utf8");
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       if (code === "ENOENT" || code === "EISDIR" || code === "ENOTDIR") {
@@ -496,17 +426,13 @@ export function createSnapshotReader(
     treeHash: record.treeHash,
     read,
     async exists(relPath: string): Promise<boolean> {
-      if (!isReadable(relPath, scope)) {
-        return false;
-      }
-      let absolute: string;
       try {
-        absolute = resolveInside(root, relPath);
+        assertReadable(relPath, scope, root);
       } catch {
         return false;
       }
       try {
-        const stats = await stat(absolute);
+        const stats = await stat(path.resolve(root, relPath));
         return stats.isFile();
       } catch {
         return false;

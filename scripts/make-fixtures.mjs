@@ -548,6 +548,8 @@ CANARY_SECRET=ct-canary-do-not-leak-0001
   );
   write(root, "node_modules/left-pad/package.json", `{"name":"left-pad"}\n`);
   write(root, "model.bin", "BINARY\u0000PAYLOAD\u0001\u0002\u0003\n");
+  write(root, "weights/model.pt", "PT\u0000WEIGHT\u0001\n");
+  write(root, "weights/model.safetensors", "SAFETENSORS\u0000WEIGHT\u0001\n");
   write(
     root,
     "dist/bundle.js",

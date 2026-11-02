@@ -3,8 +3,8 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { normalizeScope } from "../../../src/learning/contracts/index.ts";
 import { worktreePath } from "../../../src/learning/config/paths.ts";
+import { normalizeScope } from "../../../src/learning/projects/scope.ts";
 import { createSnapshotService } from "../../../src/learning/projects/snapshot.ts";
 import { fixtureGit } from "../helpers/git-fixture.ts";
 import {

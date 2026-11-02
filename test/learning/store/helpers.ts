@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 
 import {
-  normalizeScope,
   type ChangeEventId,
   type ChangeEventPayload,
   type ChangeRecord,
@@ -28,6 +27,7 @@ import {
   type SourceRow,
   type UsageRecord,
 } from "../../../src/learning/contracts/index.ts";
+import { normalizeScope } from "../../../src/learning/projects/scope.ts";
 import {
   migrate,
   openDatabase,

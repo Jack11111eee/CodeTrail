@@ -25,7 +25,6 @@ import {
   linesOf,
   newLessonId,
   newProjectId,
-  normalizeScope,
   repoIdFromIdentity,
   sliceHash,
   sliceLines,
@@ -38,6 +37,7 @@ import {
   type RepoId,
   type ScopeConfig,
 } from "../../../src/learning/contracts/index.ts";
+import { normalizeScope } from "../../../src/learning/projects/scope.ts";
 
 /**
  * Contract-level formula tests (AC-GEN-07, AC-GEN-09, AC-API-07 table half).

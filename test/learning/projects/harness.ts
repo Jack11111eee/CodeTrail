@@ -8,7 +8,6 @@ import {
 import {
   LearningError,
   newProjectId,
-  normalizeScope,
   type Clock,
   type DataPaths,
   type Database,
@@ -18,6 +17,7 @@ import {
   type RepoRecord,
   type Repositories,
 } from "../../../src/learning/contracts/index.ts";
+import { normalizeScope } from "../../../src/learning/projects/scope.ts";
 import {
   createRepositories,
   migrate,
