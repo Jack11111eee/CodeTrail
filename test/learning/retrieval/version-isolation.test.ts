@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import type {
+  Binding,
   GenerationId,
   RegisterRepoSourceInput,
   RepoId,
+  UpstreamRetrievalPort,
 } from "../../../src/learning/contracts/index.js";
 import {
   allowedCommitShas,
@@ -13,6 +15,11 @@ import {
   createSourceRegistry,
   sourceRowFromRef,
 } from "../../../src/learning/evidence/registry.js";
+import {
+  createIndexCache,
+  createRetriever,
+} from "../../../src/learning/retrieval/search.js";
+import { createSourceSearcher } from "../../../src/learning/retrieval/source-search.js";
 import {
   createRepositories,
   openDatabase,
@@ -27,6 +34,7 @@ import {
   makeGeneration,
   type EvidenceHarness,
 } from "./evidence-harness.js";
+import { contextFor } from "./retrieval-helpers.js";
 
 function repoInput(
   harness: EvidenceHarness,
@@ -202,5 +210,113 @@ describe("multi-generation source isolation", () => {
     } finally {
       harness.close();
     }
+  });
+});
+
+// ── retrieval half of AC-RET-05 ────────────────────────────────────────────
+
+const EMPTY_UPSTREAM: UpstreamRetrievalPort = {
+  search: () => Promise.resolve([]),
+  readSections: () => Promise.resolve([]),
+  pageTitle: () => Promise.resolve(""),
+};
+
+function retrievalBinding(generationId: string, commitSha: string): Binding {
+  return {
+    generationId: generationId as GenerationId,
+    repoId: "r_1" as RepoId,
+    commitSha,
+  };
+}
+
+const ONE_SHA = "1".repeat(40);
+const TWO_SHA = "2".repeat(40);
+
+describe("retrieval is bound to one generation", () => {
+  function retrieverFor(contents: Record<string, string>) {
+    return createRetriever({
+      upstream: EMPTY_UPSTREAM,
+      source: createSourceSearcher(),
+      cache: createIndexCache(),
+      resolve: (binding) =>
+        contextFor(
+          {
+            "src/cache.py": contents[binding.generationId] ?? "",
+          },
+          { binding },
+        ),
+    });
+  }
+
+  it("returns only the content bound to the requested generation", async () => {
+    const first = retrievalBinding("g_1", ONE_SHA);
+    const second = retrievalBinding("g_2", TWO_SHA);
+    const retriever = retrieverFor({
+      g_1: "SnapshotCache generation-one\n",
+      g_2: "SnapshotCache generation-two\n",
+    });
+
+    const firstHits = await retriever.search(first, "旧快照");
+    const secondHits = await retriever.search(second, "旧快照");
+
+    expect(firstHits.length).toBeGreaterThan(0);
+    expect(secondHits.length).toBeGreaterThan(0);
+    expect(firstHits.map((hit) => hit.preview).join("\n")).toContain(
+      "generation-one",
+    );
+    expect(firstHits.map((hit) => hit.preview).join("\n")).not.toContain(
+      "generation-two",
+    );
+    expect(secondHits.map((hit) => hit.preview).join("\n")).toContain(
+      "generation-two",
+    );
+    for (const hit of firstHits) expect(hit.binding).toEqual(first);
+    for (const hit of secondHits) expect(hit.binding).toEqual(second);
+  });
+
+  it("throws version_mismatch when the context belongs to another generation", async () => {
+    const requested = retrievalBinding("g_1", ONE_SHA);
+    const foreign = retrievalBinding("g_2", TWO_SHA);
+    const retriever = createRetriever({
+      upstream: EMPTY_UPSTREAM,
+      source: createSourceSearcher(),
+      cache: createIndexCache(),
+      // Deliberately returns the other generation's binding.
+      resolve: () => contextFor({ "src/cache.py": "SnapshotCache two\n" }, { binding: foreign }),
+    });
+
+    await expect(retriever.search(requested, "旧快照")).rejects.toMatchObject({
+      code: "version_mismatch",
+    });
+  });
+
+  it("does not share cache entries between generations", async () => {
+    const first = retrievalBinding("g_1", ONE_SHA);
+    const second = retrievalBinding("g_2", TWO_SHA);
+    const cache = createIndexCache();
+    const retriever = createRetriever({
+      upstream: EMPTY_UPSTREAM,
+      source: createSourceSearcher(),
+      cache,
+      resolve: (binding) =>
+        contextFor(
+          {
+            "src/cache.py":
+              binding.generationId === first.generationId
+                ? "SnapshotCache one\n"
+                : "SnapshotCache two\n",
+          },
+          { binding },
+        ),
+    });
+
+    await retriever.search(first, "旧快照");
+    const secondHits = await retriever.search(second, "旧快照");
+    expect(secondHits.map((hit) => hit.preview).join("\n")).toContain(
+      "SnapshotCache two",
+    );
+    expect(secondHits.map((hit) => hit.preview).join("\n")).not.toContain(
+      "SnapshotCache one",
+    );
   });
 });
