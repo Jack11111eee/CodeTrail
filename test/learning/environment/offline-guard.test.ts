@@ -182,6 +182,61 @@ describe("offline guard", () => {
   });
 });
 
+describe("offline guard fail-closed edge cases", () => {
+  it("blocks non-loopback IPv6, wildcard and subdomain targets", () => {
+    expect(() => http.request({ hostname: "2001:db8::1", port: 80 })).toThrow(
+      OfflineViolationError,
+    );
+    expect(() => http.request({ hostname: "0.0.0.0", port: 80 })).toThrow(
+      OfflineViolationError,
+    );
+    expect(() => net.connect({ host: "[2001:db8::1]", port: 80 })).toThrow(
+      OfflineViolationError,
+    );
+    expect(() => net.connect({ host: "0.0.0.0", port: 80 })).toThrow(
+      OfflineViolationError,
+    );
+    expect(() => tls.connect(443, "example.com")).toThrow(
+      OfflineViolationError,
+    );
+    expect(() => dns.lookup("localhost.evil.com", () => {})).toThrow(
+      OfflineViolationError,
+    );
+  });
+
+  it("blocks URL userinfo tricks that hide a non-loopback hostname", async () => {
+    await expect(fetch("http://127.0.0.1@example.com/")).rejects.toThrow(
+      OfflineViolationError,
+    );
+    expect(() => http.request("http://127.0.0.1@example.com/")).toThrow(
+      OfflineViolationError,
+    );
+  });
+
+  it("blocks a Request object whose URL is non-loopback", async () => {
+    await expect(fetch(new Request("https://example.com/"))).rejects.toThrow(
+      OfflineViolationError,
+    );
+  });
+
+  it("blocks unparseable request targets instead of letting them through", () => {
+    expect(() => http.request("not a url")).toThrow(OfflineViolationError);
+  });
+
+  it("throws a typed error carrying the blocked kind and target", () => {
+    try {
+      http.request({ hostname: "api.github.com", port: 443 });
+      expect.unreachable("the guard did not throw");
+    } catch (error) {
+      expect(error).toBeInstanceOf(OfflineViolationError);
+      const violation = error as OfflineViolationError;
+      expect(violation.code).toBe("offline_violation");
+      expect(violation.kind).toBe("http.request");
+      expect(violation.target).toBe("api.github.com");
+    }
+  });
+});
+
 describe("temporary data directory", () => {
   let seen: string | null = null;
 
@@ -207,6 +262,15 @@ describe("temporary data directory", () => {
     expect(temp.dir).not.toBe(process.env.CODETRAIL_DATA_DIR);
     temp.cleanup();
     expect(fs.existsSync(temp.dir)).toBe(false);
+  });
+
+  it("keeps the directory under the OS temp root and removes it afterwards", () => {
+    const dir = process.env.CODETRAIL_DATA_DIR as string;
+    expect(dir.startsWith(os.tmpdir())).toBe(true);
+    expect(fs.existsSync(dir)).toBe(true);
+    // `seen` is the first test's directory; its afterEach already removed it.
+    expect(seen).toBeTruthy();
+    expect(fs.existsSync(seen as string)).toBe(false);
   });
 });
 
@@ -375,6 +439,67 @@ describe("fake GitHub", () => {
     };
     expect(renamed.default_branch).toBe("trunk");
   });
+
+  it("filters state=open/closed and honours direction=asc", async () => {
+    const server = await start({ states: ["open", "closed", "merged"] });
+    const numbers = async (query: string): Promise<number[]> => {
+      const response = await fetch(
+        `${server.baseUrl}/repos/acme/widgets/pulls?${query}`,
+      );
+      expect(response.status).toBe(200);
+      return ((await response.json()) as Array<{ number: number }>).map(
+        (pr) => pr.number,
+      );
+    };
+
+    expect(
+      await numbers("state=open&sort=updated&direction=desc&per_page=10"),
+    ).toEqual([1, 4]);
+    expect(
+      await numbers("state=closed&sort=updated&direction=desc&per_page=10"),
+    ).toEqual([2, 3, 5, 6]);
+    expect(
+      await numbers("state=all&sort=updated&direction=asc&per_page=10"),
+    ).toEqual([6, 5, 4, 3, 2, 1]);
+  });
+
+  it("links first/prev/next/last on a middle page", async () => {
+    const server = await start();
+    const middle = await fetch(
+      `${server.baseUrl}/repos/acme/widgets/pulls?state=all&sort=updated&direction=desc&per_page=2&page=2`,
+    );
+    const link = middle.headers.get("link") ?? "";
+    for (const rel of ["first", "prev", "next", "last"]) {
+      expect(link, rel).toContain(`rel="${rel}"`);
+    }
+  });
+
+  it("does not mark a compare below the cap as truncated", async () => {
+    const server = await start({ compareFiles: 5 });
+    const response = await fetch(
+      `${server.baseUrl}/repos/acme/widgets/compare/main...feature-1`,
+    );
+    const body = (await response.json()) as {
+      files: unknown[];
+      truncated: boolean;
+      total_commits: number;
+    };
+    expect(body.files).toHaveLength(5);
+    expect(body.truncated).toBe(false);
+    expect(body.total_commits).toBe(5);
+  });
+
+  it("records query strings and HEAD requests", async () => {
+    const server = await start();
+    await fetch(
+      `${server.baseUrl}/repos/acme/widgets/pulls?state=all&per_page=2`,
+      { method: "HEAD" },
+    );
+    const recorded = server.requests.at(-1);
+    expect(recorded?.method).toBe("HEAD");
+    expect(recorded?.path).toContain("state=all");
+    expect(recorded?.path).toContain("per_page=2");
+  });
 });
 
 describe("loopback HTTP harness", () => {
@@ -497,6 +622,59 @@ describe("copy scanner", () => {
     ]);
     expect(noCommand.status).toBe(1);
     expect(String(noCommand.stdout)).toContain("no executable command block");
+  });
+
+  it("excludes the UI and testing trees from schema-identifier scans", () => {
+    write("src/learning/ui/panel.ts", "export const mastery = 1;\n");
+    expect(
+      runScript("scan-copy.mjs", [
+        "--root",
+        root,
+        "--forbid-in-schema",
+        "mastery",
+      ]).status,
+    ).toBe(0);
+
+    const asCopy = runScript("scan-copy.mjs", [
+      "--root",
+      root,
+      "--forbid",
+      "mastery",
+    ]);
+    expect(asCopy.status).toBe(1);
+    expect(String(asCopy.stdout)).toContain("src/learning/ui/panel.ts:1:");
+  });
+
+  it("reports a missing required heading", () => {
+    write("README.md", "# Demo\n");
+    const result = runScript("scan-copy.mjs", [
+      "--root",
+      root,
+      "--require-headings",
+      "## 不存在",
+    ]);
+    expect(result.status).toBe(1);
+    expect(String(result.stdout)).toContain(
+      'missing required heading "## 不存在"',
+    );
+  });
+
+  it("skips binary files instead of scanning them as copy", () => {
+    const file = path.join(root, "docs/model.md");
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(
+      file,
+      Buffer.from([0x00, ...Buffer.from("已证明全部正确")]),
+    );
+    expect(
+      runScript("scan-copy.mjs", ["--root", root, "--forbid", "已证明全部正确"])
+        .status,
+    ).toBe(0);
+  });
+
+  it("exits 2 on usage errors", () => {
+    expect(runScript("scan-copy.mjs", ["--bogus"]).status).toBe(2);
+    expect(runScript("scan-copy.mjs", ["--forbid"]).status).toBe(2);
   });
 });
 
@@ -623,5 +801,43 @@ describe("code scanner", () => {
     expect(
       runScript("scan-code.mjs", ["--forbid-patterns", "git push"]).status,
     ).toBe(0);
+  });
+
+  it("skips binary source files", () => {
+    const file = path.join(root, "src/blob.ts");
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, Buffer.from([0x00, ...Buffer.from("git push")]));
+    expect(
+      runScript("scan-code.mjs", [
+        "--root",
+        root,
+        "--forbid-patterns",
+        "git push",
+      ]).status,
+    ).toBe(0);
+  });
+
+  it("exits 2 on usage errors and invalid patterns", () => {
+    expect(runScript("scan-code.mjs", ["--root", root]).status).toBe(2);
+    expect(
+      runScript("scan-code.mjs", ["--root", root, "--forbid-patterns"]).status,
+    ).toBe(2);
+    expect(
+      runScript("scan-code.mjs", ["--root", root, "--forbid-patterns", "("])
+        .status,
+    ).toBe(2);
+    expect(runScript("scan-code.mjs", ["--bogus"]).status).toBe(2);
+  });
+
+  it("terminates on a zero-length match pattern", () => {
+    write("src/empty-match.ts", "export const value = 1;\n");
+    const result = runScript("scan-code.mjs", [
+      "--root",
+      root,
+      "--forbid-patterns",
+      "^",
+    ]);
+    expect(result.status).toBe(1);
+    expect(String(result.stdout)).toContain("src/empty-match.ts:1:");
   });
 });

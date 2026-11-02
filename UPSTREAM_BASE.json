@@ -643,6 +643,14 @@
     {
       "path": ".gitignore",
       "reason": "fork patch: union of the upstream patterns and the Codetrail patterns, so dist/, node_modules/, .artifacts/ and .worktrees/ all stay untracked in the fork"
+    },
+    {
+      "path": "vitest.config.ts",
+      "reason": "fork patch: test.exclude gains **/.tmp/** so the deterministic fixture repositories emitted by `pnpm run fixtures` (which contain their own *.test.ts files) are never collected as this project's tests; coverage config is otherwise unchanged"
+    },
+    {
+      "path": "eslint.config.js",
+      "reason": "fork patch: ignores gains .tmp/** and **/.tmp/** so the generated fixture trees, with their third-party and deliberately malformed source, are not linted; all lint rules and file globs are otherwise unchanged"
     }
   ]
 }

@@ -17,7 +17,16 @@ import { configDefaults, defineConfig } from "vitest/config";
  */
 export default defineConfig({
   test: {
-    exclude: [...configDefaults.exclude, "**/benchmarks/*/repo/**"],
+    // `.tmp/**` holds the deterministic fixture repositories emitted by
+    // `pnpm run fixtures`. They are real Git trees (with their own `*.test.ts`
+    // files, e.g. `library-noui/test/index.test.ts`) and must never be
+    // collected as this project's tests. `.gitignore` does not affect test
+    // discovery, so the exclusion has to be declared here.
+    exclude: [
+      ...configDefaults.exclude,
+      "**/benchmarks/*/repo/**",
+      "**/.tmp/**",
+    ],
     coverage: {
       provider: "v8",
       all: true,

@@ -60,10 +60,62 @@ function isBare(name: string): boolean {
   return name.endsWith(".git");
 }
 
+/** Fixed identity used by `scripts/make-fixtures.mjs` for every fixture commit. */
+const FIXTURE_AUTHOR = {
+  name: "Codetrail Fixtures",
+  email: "fixtures@codetrail.invalid",
+};
+
+/**
+ * Environment for read-only Git commands run against a fixture.
+ *
+ * Fixtures are built with a fixed identity and `core.autocrlf=false` under
+ * `GIT_CONFIG_NOSYSTEM=1`/`GIT_CONFIG_GLOBAL=/dev/null` (see
+ * `scripts/make-fixtures.mjs`). These assertions must not depend on the
+ * developer's `~/.gitconfig`, so `diff.renames` (which changes `diff
+ * --name-status` output) and `log.showSignature` cannot leak in. Repository
+ * location variables are dropped for the same reason the script drops them:
+ * they can be inherited from a running hook.
+ */
+function gitEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  for (const name of [
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_COMMON_DIR",
+  ]) {
+    delete env[name];
+  }
+  const nullDevice = process.platform === "win32" ? "NUL" : "/dev/null";
+  return {
+    ...env,
+    TZ: "UTC",
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: nullDevice,
+    GIT_CONFIG_SYSTEM: nullDevice,
+    GIT_AUTHOR_NAME: FIXTURE_AUTHOR.name,
+    GIT_AUTHOR_EMAIL: FIXTURE_AUTHOR.email,
+    GIT_COMMITTER_NAME: FIXTURE_AUTHOR.name,
+    GIT_COMMITTER_EMAIL: FIXTURE_AUTHOR.email,
+    GIT_TERMINAL_PROMPT: "0",
+  };
+}
+
+const GIT_CONFIG = [
+  "-c",
+  "core.autocrlf=false",
+  "-c",
+  "commit.gpgsign=false",
+];
+
 function git(name: string, args: string[]): string {
   const repo = fixturePath(name);
   const location = isBare(name) ? ["--git-dir", repo] : ["-C", repo];
-  return execFileSync("git", [...location, ...args], {
+  return execFileSync("git", [...location, ...GIT_CONFIG, ...args], {
+    env: gitEnv(),
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
   }).trim();

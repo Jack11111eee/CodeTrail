@@ -6,6 +6,10 @@ const TS_FILES = ["src/**/*.{ts,tsx}", "test/**/*.{ts,tsx}"];
 export default tseslint.config(
   {
     ignores: [
+      // Generated fixture repositories (`pnpm run fixtures`) contain third-party
+      // and deliberately malformed source that is not ours to lint.
+      ".tmp/**",
+      "**/.tmp/**",
       "coverage/**",
       "dist/**",
       "node_modules/**",

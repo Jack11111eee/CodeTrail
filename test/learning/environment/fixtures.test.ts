@@ -13,6 +13,7 @@ import {
   fixturePath,
   fixtureRemote,
   fixtureSha,
+  requireFixtures,
 } from "../helpers/git-fixture.ts";
 
 /**
@@ -100,6 +101,22 @@ describe("fixture determinism", () => {
       fs.rmSync(other, { recursive: true, force: true });
     }
   }, 180_000);
+
+  it("records the fixed metadata and a head/refs entry for every fixture", () => {
+    expect(firstManifest.generatedBy).toBe("scripts/make-fixtures.mjs");
+    expect(firstManifest.author).toEqual(FIXTURE_AUTHOR);
+    expect(new Date(firstManifest.epoch).getTime()).toBe(FIXTURE_EPOCH);
+    for (const name of FIXTURE_NAMES) {
+      const entry = firstManifest.fixtures[name];
+      expect(entry, name).toBeTruthy();
+      expect(entry.head, name).toMatch(/^[0-9a-f]{40}$/u);
+      expect(entry.bare, name).toBe(name.endsWith(".git"));
+      expect(Object.keys(entry.refs).length, name).toBeGreaterThan(0);
+      for (const sha of Object.values(entry.refs)) {
+        expect(sha, name).toMatch(/^[0-9a-f]{40}$/u);
+      }
+    }
+  });
 
   it("records the fixed author, committer and dates on every commit", () => {
     const expectedDate = new Date(FIXTURE_EPOCH).toISOString().slice(0, 10);
@@ -337,5 +354,24 @@ describe("fixture helpers", () => {
   it("resolves revisions through fixtureSha", () => {
     expect(fixtureSha("polyglot")).toMatch(/^[0-9a-f]{40}$/u);
     expect(fixtureSha("polyglot", "HEAD")).toBe(fixtureSha("polyglot"));
+  });
+
+  it("fails with a runnable hint when the fixtures are missing", () => {
+    const empty = fs.mkdtempSync(
+      path.join(os.tmpdir(), "codetrail-nofixtures-"),
+    );
+    const previous = process.env.CODETRAIL_FIXTURES_DIR;
+    process.env.CODETRAIL_FIXTURES_DIR = empty;
+    try {
+      expect(() => fixtureManifest()).toThrow(/pnpm run fixtures/u);
+      expect(() => requireFixtures()).toThrow(/pnpm run fixtures/u);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.CODETRAIL_FIXTURES_DIR;
+      } else {
+        process.env.CODETRAIL_FIXTURES_DIR = previous;
+      }
+      fs.rmSync(empty, { recursive: true, force: true });
+    }
   });
 });

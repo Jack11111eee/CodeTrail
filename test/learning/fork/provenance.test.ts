@@ -43,6 +43,9 @@ const EXPECTED_ALLOWED_MODIFICATIONS = [
   "src/visualize/page.ts",
   "src/visualize/styles.css",
   ".gitignore",
+  // The generated fixture tree must stay outside test discovery and linting.
+  "vitest.config.ts",
+  "eslint.config.js",
 ];
 
 interface Manifest {
