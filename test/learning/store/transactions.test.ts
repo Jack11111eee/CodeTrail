@@ -80,6 +80,47 @@ describe("store transactions", () => {
     }
   });
 
+  it("never shows a partial publish to an open readTransaction reader", () => {
+    writer.changes.insertMany([
+      makeChange({ eventId: "e_1", state: "discovered" }),
+    ]);
+
+    const reader = openDatabase({ file: ctx.file });
+    const readerRepos = createRepositories(reader);
+    try {
+      reader.readTransaction(() => {
+        // The first read pins the reader's snapshot before the publish commits.
+        expect(readerRepos.generations.byId("g_pub")).toBeNull();
+        expect(readerRepos.changes.byId("e_1")?.state).toBe("discovered");
+
+        ctx.db.transaction(() => {
+          writer.generations.insertPublished(
+            makeGeneration({ generationId: "g_pub", cacheKey: "ck_pub" }),
+          );
+          writer.lessons.insertMany([makeLesson({ generationId: "g_pub" })]);
+          writer.sources.insertMany([makeSource({ generationId: "g_pub" })]);
+          writer.changes.setState("e_1", "published", { publishedAt: AT });
+        });
+
+        // The committed publish is still invisible to the pinned snapshot, so
+        // the reader can never observe generation-without-lessons or a
+        // half-updated event.
+        expect(readerRepos.generations.byId("g_pub")).toBeNull();
+        expect(readerRepos.lessons.listByGeneration("g_pub")).toEqual([]);
+        expect(readerRepos.sources.all("g_pub")).toEqual([]);
+        expect(readerRepos.changes.byId("e_1")?.state).toBe("discovered");
+      });
+
+      // A fresh read outside the transaction sees the whole publish at once.
+      expect(readerRepos.generations.byId("g_pub")).not.toBeNull();
+      expect(readerRepos.lessons.listByGeneration("g_pub")).toHaveLength(1);
+      expect(readerRepos.sources.all("g_pub")).toHaveLength(1);
+      expect(readerRepos.changes.byId("e_1")?.state).toBe("published");
+    } finally {
+      reader.close();
+    }
+  });
+
   it("rolls the whole publish back when the transaction throws", () => {
     expect(() =>
       ctx.db.transaction(() => {

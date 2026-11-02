@@ -11,7 +11,10 @@ import type {
   MessageId,
   Repositories,
 } from "../../../src/learning/contracts/index.ts";
-import { createRepositories } from "../../../src/learning/store/index.ts";
+import {
+  createRepositories,
+  openDatabase,
+} from "../../../src/learning/store/index.ts";
 import {
   AT,
   closeTempDb,
@@ -106,6 +109,65 @@ describe("store message fields", () => {
     expect(
       repos.conversations.messages("c_1" as ConversationId)[0]?.citations,
     ).toEqual([]);
+  });
+
+  it("round-trips the three columns across a close and reopen of the file", () => {
+    const message = makeMessage({
+      messageId: "m_restart" as MessageId,
+      status: "streaming",
+      answerPhase: "generating",
+      unknownReason: "insufficient_context",
+      incomplete: true,
+      citations: [makeCitation()],
+    });
+    repos.conversations.insertMessage(message);
+
+    // Simulate a restart: the file, not the in-memory statement cache, must
+    // carry the three columns.
+    ctx.db.close();
+    const reopened = openDatabase({ file: ctx.file });
+    try {
+      const restored = createRepositories(reopened).conversations.messages(
+        "c_1" as ConversationId,
+      );
+      expect(restored).toEqual([message]);
+    } finally {
+      reopened.close();
+    }
+  });
+
+  it("applies the DDL defaults when the three columns are omitted", () => {
+    ctx.db.raw
+      .prepare(
+        `INSERT INTO messages (message_id, conversation_id, role, content, status, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run("m_defaults", "c_1", "assistant", "answer", "complete", AT);
+
+    const row = ctx.db.raw
+      .prepare(
+        `SELECT answer_phase, unknown_reason, incomplete FROM messages
+         WHERE message_id = ?`,
+      )
+      .get("m_defaults") as {
+      answer_phase: string;
+      unknown_reason: string | null;
+      incomplete: number;
+    };
+    expect(row).toEqual({
+      answer_phase: "complete",
+      unknown_reason: null,
+      incomplete: 0,
+    });
+
+    const [restored] = repos.conversations.messages(
+      "c_1" as ConversationId,
+    );
+    expect(restored).toMatchObject({
+      answerPhase: "complete",
+      unknownReason: null,
+      incomplete: false,
+    });
   });
 
   it("cancelStreaming rewrites every streaming row and returns the count", () => {

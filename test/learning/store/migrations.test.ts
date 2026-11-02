@@ -1,10 +1,15 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { MIGRATIONS, migrate } from "../../../src/learning/store/index.ts";
+import {
+  MIGRATIONS,
+  migrate,
+  openDatabase,
+} from "../../../src/learning/store/index.ts";
 import { AT, closeTempDb, createTempDb, type TempDb } from "./helpers.ts";
 
 /** The DDL's twenty-one tables; `migrations` is the bookkeeping one. */
@@ -103,6 +108,34 @@ describe("store migrations", () => {
     expect(migrate(ctx.db)).toEqual({ applied: 0, version: 1 });
     expect(migrate(ctx.db)).toEqual({ applied: 0, version: 1 });
     expect(tableNames(ctx.db)).toEqual(EXPECTED_TABLES);
+  });
+
+  it("applies migration 1 exactly once and records it durably across reconnects", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "codetrail-migrate-"));
+    const file = path.join(dir, "fresh.sqlite");
+
+    const first = openDatabase({ file });
+    try {
+      expect(migrate(first)).toEqual({ applied: 1, version: 1 });
+      const rows = first.raw
+        .prepare("SELECT version, applied_at FROM migrations ORDER BY version")
+        .all() as { version: number; applied_at: string }[];
+      expect(rows.map((row) => row.version)).toEqual([1]);
+      expect(Number.isNaN(Date.parse(rows[0]?.applied_at ?? ""))).toBe(false);
+    } finally {
+      first.close();
+    }
+
+    // A fresh connection (a restarted process) reads the bookkeeping row and
+    // applies nothing, even though the connection is brand new.
+    const second = openDatabase({ file });
+    try {
+      expect(migrate(second)).toEqual({ applied: 0, version: 1 });
+      expect(tableNames(second)).toEqual(EXPECTED_TABLES);
+    } finally {
+      second.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("opens with WAL, foreign keys and a 5000 ms busy timeout", () => {

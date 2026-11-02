@@ -110,6 +110,35 @@ describe("store constraints", () => {
     expect(output).toMatch(/^CONSTRAINT:/);
   });
 
+  it("declares idx_jobs_stream_running as a partial unique index on stream_id", () => {
+    const indexes = ctx.db.raw.prepare("PRAGMA index_list('jobs')").all() as {
+      name: string;
+      unique: number;
+      partial: number;
+    }[];
+    const running = indexes.find(
+      (index) => index.name === "idx_jobs_stream_running",
+    );
+    expect(running).toBeDefined();
+    expect(Number(running?.unique)).toBe(1);
+    expect(Number(running?.partial)).toBe(1);
+
+    const columns = ctx.db.raw
+      .prepare("PRAGMA index_info('idx_jobs_stream_running')")
+      .all() as { name: string }[];
+    expect(columns.map((column) => column.name)).toEqual(["stream_id"]);
+
+    const row = ctx.db.raw
+      .prepare(
+        "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'idx_jobs_stream_running'",
+      )
+      .get() as { sql: string };
+    expect(row.sql).toMatch(/CREATE\s+UNIQUE\s+INDEX[\s\S]*ON\s+jobs\s*\(\s*stream_id\s*\)/);
+    expect(row.sql).toMatch(
+      /WHERE\s+state\s+IN\s*\(\s*'running'\s*,\s*'cancelling'\s*\)\s+AND\s+stream_id\s+IS\s+NOT\s+NULL/,
+    );
+  });
+
   it("leaves NULL stream_id rows unconstrained", () => {
     repos.jobs.insert(
       makeJob({ jobId: "j_local", streamId: null, state: "running" }),
