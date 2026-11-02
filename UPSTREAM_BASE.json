@@ -650,7 +650,7 @@
     },
     {
       "path": "eslint.config.js",
-      "reason": "fork patch: ignores gains .tmp/** and **/.tmp/** so the generated fixture trees, with their third-party and deliberately malformed source, are not linted; all lint rules and file globs are otherwise unchanged"
+      "reason": "fork patch: ignores gains .tmp/** and **/.tmp/** so the generated fixture trees, with their third-party and deliberately malformed source, are not linted; a scoped **/*.mjs block supplies Node runtime globals for the ESM scripts; all other lint rules and file globs are unchanged"
     }
   ]
 }
