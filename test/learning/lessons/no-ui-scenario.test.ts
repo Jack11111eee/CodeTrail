@@ -10,6 +10,7 @@ import {
   type AssembleInput,
 } from "../../../src/learning/lessons/assemble.ts";
 import { parseLesson } from "../../../src/learning/lessons/schema.ts";
+import { validateStructural } from "../../../src/learning/lessons/validate/structural.ts";
 import { normalizeScope } from "../../../src/learning/projects/scope.ts";
 import { reportForFixture } from "../projects/scope-fixtures.ts";
 import {
@@ -18,6 +19,7 @@ import {
   defaultGeneration,
   researchLesson,
 } from "../helpers/lesson-sample.ts";
+import { researchFixture } from "../helpers/lesson-context.ts";
 
 function file(
   path: string,
@@ -147,5 +149,29 @@ describe("a UI fixture", () => {
       assembleComponentDiagram(input),
     );
     expect(assembleComponentDiagram(input).kind).toBe("component");
+  });
+});
+
+/**
+ * AC-LES-12: the structural validator repeats the no-UI rule, so a lesson
+ * cannot smuggle a `user_flow` scenario into a library generation.
+ */
+describe("validateStructural scenario kind", () => {
+  it("accepts a library_interface scenario", () => {
+    const { lesson, ctx } = researchFixture();
+    expect(validateStructural(lesson, ctx).ok).toBe(true);
+  });
+
+  it("rejects user_flow on a project with no UI surface", () => {
+    const { lesson, ctx } = researchFixture();
+    const broken = structuredClone(lesson);
+    broken.scenario.kind = "user_flow";
+
+    const result = validateStructural(broken, ctx);
+
+    expect(result.ok).toBe(false);
+    expect(result.issues.map((entry) => entry.code)).toContain(
+      "scenario_kind",
+    );
   });
 });
