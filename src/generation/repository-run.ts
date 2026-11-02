@@ -102,6 +102,15 @@ export interface BeginRepositoryRunInput {
   planningContext?: string;
 
   /**
+   * Whether the run may write code-mode setup files into the repository.
+   *
+   * Defaults to `true` (CLI behaviour). A caller that only reads a repository it
+   * does not own passes `false`, which suppresses the scheduled-update workflow
+   * and the `AGENTS.md`/`CLAUDE.md` snippets.
+   */
+  writeRepoFiles?: boolean;
+
+  /**
    * Producer and metadata identities for the current session.
    */
   actor: RepositoryRunActor;
@@ -402,6 +411,7 @@ export async function beginRepositoryRun(
 
   await ensureCodeModeRepoSetup(input.root, {
     createWorkflow: input.mode === "init",
+    writeRepoFiles: input.writeRepoFiles,
   });
 
   const persisted = await readRepositoryRunState(input.root);

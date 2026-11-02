@@ -57,6 +57,13 @@ export interface CodeModeRepoSetupOptions {
    * never silently overwritten.
    */
   createWorkflow?: boolean;
+  /**
+   * Write anything into the repository at all. Defaults to `true`, which is the
+   * CLI behaviour. Callers that analyse a repository they do not own (the
+   * learning module runs generation against a user's checkout) set this to
+   * `false` so no workflow file and no agent-instruction file is created.
+   */
+  writeRepoFiles?: boolean;
   /** Cron expression for a freshly created workflow. Defaults to {@link DEFAULT_CODE_MODE_CRON}. */
   cronExpression?: string;
   /**
@@ -71,11 +78,17 @@ export interface CodeModeRepoSetupOptions {
  * Ensure the repo is set up for code mode: refresh the managed agent-instruction
  * snippets, and, when `options.createWorkflow` is set, create the scheduled-update
  * workflow if it does not already exist.
+ *
+ * Passing `writeRepoFiles: false` skips both writes entirely, so a run over a
+ * repository the caller does not own leaves it byte-identical.
  */
 export async function ensureCodeModeRepoSetup(
   cwd: string,
   options: CodeModeRepoSetupOptions = {},
 ): Promise<void> {
+  if (options.writeRepoFiles === false) {
+    return;
+  }
   if (options.createWorkflow) {
     await ensureCodeModeWorkflow(
       cwd,

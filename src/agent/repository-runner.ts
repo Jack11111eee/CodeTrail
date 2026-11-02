@@ -282,6 +282,15 @@ export interface NativeRepositoryGenerationOptions {
   planningContext?: string | null;
 
   /**
+   * Whether the run may write code-mode setup files into the repository.
+   *
+   * Defaults to `true`. Callers that generate into a repository they do not own
+   * pass `false` so no `.github/workflows/openwiki-update.yml`, `AGENTS.md` or
+   * `CLAUDE.md` is created.
+   */
+  writeRepoFiles?: boolean;
+
+  /**
    * Stable model identity written to repository run metadata.
    */
   modelId: string;
@@ -414,6 +423,7 @@ async function beginNativeRepositoryRun(
     language: options.language ?? undefined,
     force: options.force,
     planningContext: options.planningContext ?? undefined,
+    writeRepoFiles: options.writeRepoFiles,
     actor: {
       producerActor: OPENWIKI_PRODUCER_ACTOR,
       metadataModel: options.modelId,
