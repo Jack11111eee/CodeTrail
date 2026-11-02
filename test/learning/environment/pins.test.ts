@@ -190,6 +190,13 @@ describe("--pins on a mutated copy", () => {
       },
     },
     {
+      name: "empty .node-version",
+      field: ".node-version",
+      mutate: async (root) => {
+        await writeFile(path.join(root, ".node-version"), "\n", "utf8");
+      },
+    },
+    {
       name: "tsconfig.json exclude without the client entry",
       field: "tsconfig.json.exclude",
       mutate: (root) =>

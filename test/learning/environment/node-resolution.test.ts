@@ -1,5 +1,13 @@
 import { execFile } from "node:child_process";
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -251,6 +259,19 @@ describe("CLI", () => {
     const result = await run([script], { CODETRAIL_NODE_BIN: process.execPath });
 
     expect(result.code).toBe(7);
+  });
+
+  it("forwards an inline -e snippet to the resolved interpreter", async () => {
+    // `clean` and `postbuild` are inline `-e` snippets, so the launcher must
+    // hand `-e` and its argument to the pinned interpreter instead of treating
+    // them as launcher flags. A regression here only shows up at build time.
+    const pinned = resolveNode();
+    const result = await run(["-e", "process.stdout.write(process.execPath)"], {
+      CODETRAIL_NODE_BIN: pinned.bin,
+    });
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toBe(await realpath(pinned.bin));
   });
 
   it("exits 128 + signum when the child dies from a signal", async () => {

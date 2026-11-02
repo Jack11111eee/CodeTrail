@@ -188,6 +188,50 @@ describe("--audit-global", () => {
       false,
     );
   });
+
+  it("catches every mutating filesystem API the launcher guard covers", async () => {
+    // One API is not enough: the guard is an alternation, so a dropped branch
+    // (or a typo in one) would let that write path through unnoticed.
+    const mutators = [
+      "appendFileSync",
+      "appendFile",
+      "mkdirSync",
+      "rmSync",
+      "rmdir",
+      "unlinkSync",
+      "rename",
+      "copyFile",
+      "chmodSync",
+      "createWriteStream",
+      "open",
+    ];
+    const launcher = path.join(root, "scripts", "with-node.mjs");
+    const original = await readFile(launcher, "utf8");
+
+    try {
+      for (const mutator of mutators) {
+        await writeFile(
+          launcher,
+          `${original}\nexport const leak = () => ${mutator}("/tmp/leak", "x");\n`,
+          "utf8",
+        );
+
+        const result = await runCheckEnv(["--audit-global", "--root", root]);
+
+        expect(result.code, mutator).not.toBe(0);
+        expect(result.stderr, mutator).toContain("launcher.read-only");
+        const report = JSON.parse(result.stdout) as AuditReport;
+        expect(
+          report.auditGlobal?.checks.find(
+            (check) => check.field === "launcher.read-only",
+          )?.ok,
+          mutator,
+        ).toBe(false);
+      }
+    } finally {
+      await writeFile(launcher, original, "utf8");
+    }
+  });
 });
 
 describe("--audit-global token coverage", () => {
@@ -294,6 +338,13 @@ describe("--simulate-node", () => {
     expect(report.nodeVersion).toBe("22.22.0");
   });
 
+  it("rejects a non-semver --simulate-node value instead of guessing", async () => {
+    const result = await runCheckEnv(["--simulate-node", "latest"], { HOME: home });
+
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain("node_version_unsupported");
+  });
+
   it("writes no global Node configuration anywhere outside the repository", async () => {
     const before = await listFiles(home);
 
@@ -329,6 +380,24 @@ describe("node verdict (AC-ENV-01/04)", () => {
     expect(report.nodeVersion).toBe("23.0.0");
     expect(report.resolvedNode).toBe(pinned);
     expect(report.resolvedVia).toBe("nvm");
+  });
+
+  it("reports node fail and exits non-zero when no interpreter resolves", async () => {
+    await writeFile(path.join(root, ".node-version"), "99.0.0\n", "utf8");
+    const emptyPath = path.join(dir, "empty-path");
+    await mkdir(emptyPath, { recursive: true });
+
+    const result = await runCheckEnv(["--root", root], {
+      HOME: home,
+      PATH: emptyPath,
+      CODETRAIL_NODE_BIN: "",
+    });
+
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain("node_version_unsupported");
+    const report = JSON.parse(result.stdout) as AuditReport;
+    expect(report.node).toBe("fail");
+    expect(report.resolvedNode).toBeNull();
   });
 });
 
