@@ -168,6 +168,48 @@ const C_SUITES = Object.freeze([
   }),
 ]);
 
+/** Where the regression categories and the acceptance matrix live (§21). */
+const REGRESSION_DIR = "test/learning/regression";
+const ACCEPTANCE_DIR = "test/learning/acceptance";
+/** The canonical R01…R17 and F01…F10 counts AC-GATE-D pins (Appendix A.13/A.14). */
+const EXPECTED_REGRESSION_GROUPS = 17;
+const EXPECTED_ACCEPTANCE_FLOWS = 10;
+/** The canonical registry the per-file expectations are read from. */
+const AC_REGISTRY_FILE = `${ACCEPTANCE_DIR}/ac-registry.ts`;
+
+/**
+ * The D stage: waves 6a–6b plus every regression and acceptance suite
+ * (architecture §21 invariant 4). Phase D is the release verdict, so it runs
+ * the whole regression set and the acceptance matrix before its own gate test.
+ *
+ * The two directory entries are globbed by the runner (`*.test.ts` inside
+ * them), so a suite added or removed on disk is picked up without editing this
+ * table; the counts printed in the D result are measured from the filesystem
+ * by {@link measureGateCounts}, never declared.
+ *
+ * The acceptance flows boot the built server (one or more node processes plus
+ * Git each), so they are capped to a few workers: seven-at-once starves the
+ * box and turns a correct flow into a timeout on a loaded machine.
+ */
+const D_SUITES = Object.freeze([
+  Object.freeze({
+    name: "regression",
+    kind: "test",
+    paths: Object.freeze([REGRESSION_DIR]),
+  }),
+  Object.freeze({
+    name: "acceptance",
+    kind: "test",
+    paths: Object.freeze([ACCEPTANCE_DIR]),
+    args: Object.freeze(["--maxWorkers=3"]),
+  }),
+  Object.freeze({
+    name: "d-gate",
+    kind: "test",
+    paths: Object.freeze(["test/learning/phase/d-gate.test.ts"]),
+  }),
+]);
+
 /**
  * The stage registry. B/C/D append one frozen entry each; A is owned by the
  * gate-a issue and nobody else touches it.
@@ -223,6 +265,17 @@ export const STAGES = Object.freeze([
     testFile: "test/learning/phase/c-gate.test.ts",
     suites: C_SUITES,
   }),
+  Object.freeze({
+    phase: "D",
+    testFile: "test/learning/phase/d-gate.test.ts",
+    suites: D_SUITES,
+    // The expected counts, not the measured ones: `runStage` globs the
+    // filesystem and fails the stage when it does not match these.
+    counts: Object.freeze({
+      regressions: EXPECTED_REGRESSION_GROUPS,
+      matrix: EXPECTED_ACCEPTANCE_FLOWS,
+    }),
+  }),
 ]);
 
 /** Names each stage must keep; deleting one is a red gate, not a green one. */
@@ -247,6 +300,7 @@ const REQUIRED_SUITES = Object.freeze({
   ]),
   B: Object.freeze(["b-gate"]),
   C: Object.freeze(["updates", "c-gate"]),
+  D: Object.freeze(["regression", "acceptance", "d-gate"]),
 });
 
 function isPlainObject(value) {
@@ -289,6 +343,218 @@ function containsTestFile(directory) {
   return false;
 }
 
+/** The regular files directly inside `directory`, sorted; `[]` when absent. */
+function fileNames(directory) {
+  let entries;
+  try {
+    entries = fs.readdirSync(directory, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  return entries
+    .filter((entry) => entry.isFile())
+    .map((entry) => entry.name)
+    .sort();
+}
+
+const REGRESSION_FILE = /^r(\d{2})-[^/]+\.test\.ts$/u;
+const ACCEPTANCE_FILE = /^f(\d{2})-[^/]+\.test\.ts$/u;
+/** `.only(` and `.skip(` silence a suite; `.skipIf(` is a conditional guard. */
+const SKIP_CALL = /\.(?:only|skip)\s*\(/u;
+
+function missingIds(present, expected) {
+  const missing = [];
+  for (let index = 1; index <= expected; index += 1) {
+    const id = String(index).padStart(2, "0");
+    if (!present.has(id)) missing.push(id);
+  }
+  return missing;
+}
+
+function unexpectedIds(present, expected) {
+  const allowed = new Set();
+  for (let index = 1; index <= expected; index += 1) {
+    allowed.add(String(index).padStart(2, "0"));
+  }
+  return [...present].filter((id) => !allowed.has(id)).sort();
+}
+
+/**
+ * Every regression/acceptance owner path the canonical registry names. The
+ * registry is the source of truth for "which files must exist"; reading it
+ * keeps the gate from hard-coding a list that could drift from Appendix A.
+ */
+function registryOwnerFiles(root) {
+  let text;
+  try {
+    text = fs.readFileSync(path.join(root, AC_REGISTRY_FILE), "utf8");
+  } catch {
+    return { regression: [], acceptance: [] };
+  }
+  const regression = new Set();
+  const acceptance = new Set();
+  for (const match of text.matchAll(
+    /"((?:test\/learning\/regression|test\/learning\/acceptance)\/[^"]+\.test\.ts)"/gu,
+  )) {
+    const relative = match[1];
+    if (relative.startsWith(`${REGRESSION_DIR}/`)) regression.add(relative);
+    else acceptance.add(relative);
+  }
+  return {
+    regression: [...regression].sort(),
+    acceptance: [...acceptance].sort(),
+  };
+}
+
+/**
+ * Measures the D gate from the filesystem.
+ *
+ * `regressions` is the number of distinct R01…R17 categories (`rNN-*.test.ts`),
+ * not the number of files: a category may have several AC-level files.
+ * `matrix` is the number of distinct F01…F10 flows. `missingRegressionFiles`
+ * additionally compares the canonical registry's owner set against disk, so
+ * deleting one file out of a two-file category is still caught.
+ */
+export function measureGateCounts(root) {
+  const regressionNames = fileNames(path.join(root, REGRESSION_DIR));
+  const acceptanceNames = fileNames(path.join(root, ACCEPTANCE_DIR));
+
+  const regressionGroups = new Set();
+  let regressionFileCount = 0;
+  for (const name of regressionNames) {
+    const match = REGRESSION_FILE.exec(name);
+    if (match === null) continue;
+    regressionGroups.add(match[1]);
+    regressionFileCount += 1;
+  }
+
+  const acceptanceGroups = new Set();
+  let acceptanceFileCount = 0;
+  for (const name of acceptanceNames) {
+    const match = ACCEPTANCE_FILE.exec(name);
+    if (match === null) continue;
+    acceptanceGroups.add(match[1]);
+    acceptanceFileCount += 1;
+  }
+
+  const registry = registryOwnerFiles(root);
+  return {
+    regressions: regressionGroups.size,
+    matrix: acceptanceGroups.size,
+    regressionFiles: regressionFileCount,
+    acceptanceFiles: acceptanceFileCount,
+    missingRegressions: missingIds(
+      regressionGroups,
+      EXPECTED_REGRESSION_GROUPS,
+    ),
+    unexpectedRegressions: unexpectedIds(
+      regressionGroups,
+      EXPECTED_REGRESSION_GROUPS,
+    ),
+    missingFlows: missingIds(acceptanceGroups, EXPECTED_ACCEPTANCE_FLOWS),
+    unexpectedFlows: unexpectedIds(acceptanceGroups, EXPECTED_ACCEPTANCE_FLOWS),
+    missingRegressionFiles: registry.regression.filter(
+      (relative) => !exists(path.join(root, relative)),
+    ),
+    missingAcceptanceFiles: registry.acceptance.filter(
+      (relative) => !exists(path.join(root, relative)),
+    ),
+  };
+}
+
+/**
+ * Finds a committed `.only(`/`.skip(` in any regression or acceptance file.
+ * `.skipIf(...)` is allowed because it still executes the suite when its
+ * condition holds; the forbidden forms silence a suite unconditionally.
+ */
+export function findSkippedSuites(root) {
+  const offenders = [];
+  for (const directory of [REGRESSION_DIR, ACCEPTANCE_DIR]) {
+    for (const name of fileNames(path.join(root, directory))) {
+      if (!name.endsWith(".test.ts")) continue;
+      let text;
+      try {
+        text = fs.readFileSync(path.join(root, directory, name), "utf8");
+      } catch {
+        continue;
+      }
+      if (SKIP_CALL.test(text)) offenders.push(`${directory}/${name}`);
+    }
+  }
+  return offenders.sort();
+}
+
+/**
+ * Every reason the D gate must be red before a child suite runs. The count is
+ * measured, so a deleted or renamed suite names the shortfall instead of
+ * certifying a matrix that no longer exists.
+ */
+function gateProblems(root) {
+  const counts = measureGateCounts(root);
+  const problems = [];
+
+  const regressionShort =
+    counts.regressions !== EXPECTED_REGRESSION_GROUPS ||
+    counts.missingRegressions.length > 0 ||
+    counts.unexpectedRegressions.length > 0 ||
+    counts.missingRegressionFiles.length > 0;
+  if (regressionShort) {
+    const details = [];
+    if (counts.missingRegressions.length > 0) {
+      details.push(
+        `missing ${counts.missingRegressions.map((id) => `R${id}`).join(",")}`,
+      );
+    }
+    if (counts.unexpectedRegressions.length > 0) {
+      details.push(
+        `unexpected ${counts.unexpectedRegressions
+          .map((id) => `R${id}`)
+          .join(",")}`,
+      );
+    }
+    if (counts.missingRegressionFiles.length > 0) {
+      details.push(`missing files ${counts.missingRegressionFiles.join(",")}`);
+    }
+    problems.push(
+      `regression_shortfall ${counts.regressions}/${EXPECTED_REGRESSION_GROUPS}` +
+        (details.length > 0 ? ` (${details.join("; ")})` : ""),
+    );
+  }
+
+  const matrixShort =
+    counts.matrix !== EXPECTED_ACCEPTANCE_FLOWS ||
+    counts.missingFlows.length > 0 ||
+    counts.unexpectedFlows.length > 0 ||
+    counts.missingAcceptanceFiles.length > 0;
+  if (matrixShort) {
+    const details = [];
+    if (counts.missingFlows.length > 0) {
+      details.push(
+        `missing ${counts.missingFlows.map((id) => `F${id}`).join(",")}`,
+      );
+    }
+    if (counts.unexpectedFlows.length > 0) {
+      details.push(
+        `unexpected ${counts.unexpectedFlows.map((id) => `F${id}`).join(",")}`,
+      );
+    }
+    if (counts.missingAcceptanceFiles.length > 0) {
+      details.push(`missing files ${counts.missingAcceptanceFiles.join(",")}`);
+    }
+    problems.push(
+      `acceptance_shortfall ${counts.matrix}/${EXPECTED_ACCEPTANCE_FLOWS}` +
+        (details.length > 0 ? ` (${details.join("; ")})` : ""),
+    );
+  }
+
+  const skipped = findSkippedSuites(root);
+  if (skipped.length > 0) {
+    problems.push(`skipped_suite ${skipped.join(",")}`);
+  }
+
+  return problems;
+}
+
 /** A readable, cwd-independent description of what a suite runs. */
 function describeSuite(suite) {
   if (suite.kind === "script") {
@@ -305,6 +571,7 @@ function describeSuite(suite) {
     // suite is documented to need 120s as well.
     "--testTimeout=120000",
     "--hookTimeout=120000",
+    ...(suite.args ?? []),
     ...suite.paths,
   ].join(" ");
 }
@@ -363,6 +630,16 @@ function preflightStage(stage, root) {
     const problem = preflightSuite(suite, root);
     if (problem !== null) return { name: suite.name, error: problem };
   }
+
+  // The D stage is a count gate as well as a suite gate: a missing or renamed
+  // regression/acceptance file, or a silenced suite, must fail before anything
+  // is spawned. `counts` names the measured shortfall.
+  if (stage.phase === "D") {
+    const problems = gateProblems(root);
+    if (problems.length > 0) {
+      return { name: "counts", error: problems.join("; ") };
+    }
+  }
   return null;
 }
 
@@ -388,6 +665,7 @@ function runSuite(suite, stage, root) {
           path.join(root, VITEST_CONFIG),
           "--testTimeout=120000",
           "--hookTimeout=120000",
+          ...(suite.args ?? []),
           ...suite.paths,
         ];
 
@@ -439,6 +717,23 @@ function runSuite(suite, stage, root) {
 }
 
 /**
+ * The counts a D result carries, measured from disk. A/C/B results carry none.
+ * `summary` is the literal `regressions:17 matrix:10` line AC-GATE-D names, so
+ * a shell assertion can match the documented string without parsing JSON.
+ */
+function countsOfStage(stage, root) {
+  if (stage.phase !== "D") return {};
+  const measured = measureGateCounts(root);
+  return {
+    counts: {
+      regressions: measured.regressions,
+      matrix: measured.matrix,
+    },
+    summary: `regressions:${measured.regressions} matrix:${measured.matrix}`,
+  };
+}
+
+/**
  * Runs one phase. Stops at the first red suite; nothing later in the phase or
  * the chain runs. `simulated` can only force this phase red.
  */
@@ -481,6 +776,7 @@ async function runStage(stage, options) {
           error: blocked.error,
         },
       ],
+      ...countsOfStage(stage, root),
     };
   }
 
@@ -506,10 +802,16 @@ async function runStage(stage, options) {
         passed: false,
         failedStage: entry.name,
         stages,
+        ...countsOfStage(stage, root),
       };
     }
   }
-  return { phase: stage.phase, passed: true, stages };
+  return {
+    phase: stage.phase,
+    passed: true,
+    stages,
+    ...countsOfStage(stage, root),
+  };
 }
 
 /**
@@ -545,6 +847,15 @@ function flattenStages(results) {
     for (const stage of result.stages ?? []) stages.push(stage);
   }
   return stages;
+}
+
+/** The measured D counts, when the D stage ran; `{}` otherwise. */
+function gateCountsOf(results) {
+  const stage = results.find(
+    (result) => result.phase === "D" && result.counts !== undefined,
+  );
+  if (stage === undefined) return {};
+  return { counts: stage.counts, summary: stage.summary };
 }
 
 /**
@@ -583,6 +894,7 @@ export async function runPhase(through, options = {}) {
         order,
         failed: { phase, stage: "phase_not_registered" },
         error: `phase_not_registered ${phase}`,
+        ...gateCountsOf(results),
       };
     }
 
@@ -600,6 +912,7 @@ export async function runPhase(through, options = {}) {
           stage: result.failedStage ?? "unknown",
           ...(result.simulated === true ? { simulated: true } : {}),
         },
+        ...gateCountsOf(results),
       };
     }
   }
@@ -609,6 +922,7 @@ export async function runPhase(through, options = {}) {
     passed: true,
     stages: flattenStages(results),
     order: checkOrder(results),
+    ...gateCountsOf(results),
   };
 }
 
@@ -650,6 +964,7 @@ export async function verifyOrder(options = {}) {
           : { passed: result.passed === true }),
       })),
     },
+    ...gateCountsOf(results),
   };
 }
 
