@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -19,6 +20,7 @@ import {
   runToCompletion,
   SHA_A,
   SHA_B,
+  SHA_C,
   type Harness,
 } from "./harness.ts";
 
@@ -163,5 +165,111 @@ describe("publish transaction", () => {
     expect(workspace.knowledgeDir).not.toBe(
       knowledgePath(harness.paths, "g_other" as GenerationId),
     );
+  });
+
+  test("a cancel that lands during publish rolls the generation back", async () => {
+    const harness = await createHarness();
+    harnesses.push(harness);
+    const job = insertJob(
+      harness,
+      generationInput(harness, { sha: SHA_A }),
+      "running",
+    );
+    const generationId = "g_cancelrace" as GenerationId;
+    const workspace = harness.publisher.buildWorkspace(job.jobId);
+    await mkdir(workspace.knowledgeDir, { recursive: true });
+    await writeFile(
+      path.join(workspace.knowledgeDir, "page.md"),
+      "# page\n",
+      "utf8",
+    );
+    const manifest = await harness.publisher.seal(
+      workspace.knowledgeDir,
+      generationId,
+    );
+    const commit: PublishCommit = {
+      manifest,
+      generationId,
+      jobId: job.jobId,
+      kind: "research",
+      comparisonBaseSha: null,
+      lessons: [],
+      sources: [],
+      changeEventId: null,
+      linkedEventId: null,
+      linkRelation: null,
+      publishedCursor: null,
+    };
+
+    // `publishAtomic` yields while the staging tree is renamed; the cancel
+    // lands in that window, after the entry check has already passed.
+    const publishing = harness.publisher.publishAtomic(commit);
+    const cancelling = await harness.runner.cancel(job.jobId);
+    expect(cancelling.state).toBe("cancelling");
+
+    await expect(publishing).rejects.toThrow();
+    expect(harness.repos.generations.byId(generationId)).toBeNull();
+    expect(harness.repos.jobs.byId(job.jobId)?.state).toBe("cancelling");
+
+    // The rename happened, but no row references the directory: GC reclaims it.
+    const renamed = knowledgePath(harness.paths, generationId);
+    expect(existsSync(renamed)).toBe(true);
+    const report = await harness.publisher.gc();
+    expect(report.removedKnowledge).toContain(generationId);
+    expect(existsSync(renamed)).toBe(false);
+  });
+
+  test("gc reclaims unreferenced directories and keeps published and in-flight ones", async () => {
+    const harness = await createHarness();
+    harnesses.push(harness);
+    const published = await runToCompletion(
+      harness,
+      generationInput(harness, { sha: SHA_A }),
+    );
+    const publishedId = published.outputGenerationId!;
+
+    const orphanStaging = path.join(harness.paths.staging, "j_orphan");
+    await mkdir(orphanStaging, { recursive: true });
+    await writeFile(path.join(orphanStaging, "junk.txt"), "junk", "utf8");
+    const orphanKnowledge = knowledgePath(
+      harness.paths,
+      "g_orphan" as GenerationId,
+    );
+    await mkdir(orphanKnowledge, { recursive: true });
+    await writeFile(path.join(orphanKnowledge, "junk.txt"), "junk", "utf8");
+
+    const queued = insertJob(
+      harness,
+      generationInput(harness, { sha: SHA_B }),
+      "queued",
+    );
+    const running = insertJob(
+      harness,
+      generationInput(harness, { sha: SHA_C }),
+      "running",
+    );
+    for (const job of [queued, running]) {
+      const workspace = harness.publisher.buildWorkspace(job.jobId);
+      await mkdir(workspace.treeDir, { recursive: true });
+      await writeFile(path.join(workspace.treeDir, "keep.txt"), "x", "utf8");
+    }
+    const queuedDir = harness.publisher.buildWorkspace(queued.jobId).stagingDir;
+    const runningDir = harness.publisher.buildWorkspace(running.jobId).stagingDir;
+
+    const report = await harness.publisher.gc();
+
+    expect(report.removedWorkspaces).toContain(orphanStaging);
+    expect(report.removedWorkspaces).not.toContain(queuedDir);
+    expect(report.removedWorkspaces).not.toContain(runningDir);
+    expect(report.removedKnowledge).toContain("g_orphan" as GenerationId);
+    expect(report.keptPublished).toBe(1);
+    expect(report.keptInFlight).toBe(2);
+    expect(report.bytesFreed).toBeGreaterThan(0);
+
+    expect(existsSync(orphanStaging)).toBe(false);
+    expect(existsSync(orphanKnowledge)).toBe(false);
+    expect(existsSync(knowledgePath(harness.paths, publishedId))).toBe(true);
+    expect(existsSync(queuedDir)).toBe(true);
+    expect(existsSync(runningDir)).toBe(true);
   });
 });

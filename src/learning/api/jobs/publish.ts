@@ -483,6 +483,22 @@ export function createPublisher(deps: {
 
       faultPoint("tx_before");
       db.transaction(() => {
+        // Re-read inside the transaction: a cancel may have landed while the
+        // staging tree was being renamed. Publishing a generation for a job
+        // that is no longer running would violate AC-GEN-03, so roll back and
+        // leave the renamed directory unreferenced for GC.
+        const current = repos.jobs.byId(input.jobId);
+        if (
+          current === null ||
+          current.state === "cancelled" ||
+          current.state === "cancelling"
+        ) {
+          throw new LearningError("conflict", "任务已取消", {
+            jobId: input.jobId,
+            state: current?.state ?? "missing",
+          });
+        }
+
         const record: GenerationRecord = {
           generationId: input.generationId,
           cacheKey: generation.cacheKey,
@@ -538,11 +554,7 @@ export function createPublisher(deps: {
           }
         }
 
-        const current = repos.jobs.byId(input.jobId);
-        if (
-          current !== null &&
-          ALLOWED_JOB_TRANSITIONS[current.state].includes("completed")
-        ) {
+        if (ALLOWED_JOB_TRANSITIONS[current.state].includes("completed")) {
           repos.jobs.transition(input.jobId, [current.state], "completed", {
             outputGenerationId: input.generationId,
             finishedAt: now,
@@ -550,6 +562,7 @@ export function createPublisher(deps: {
             errorDetail: null,
           });
         }
+
         const attempt = repos.attempts
           .list(input.jobId)
           .find((entry) => entry.state === "running");
@@ -589,7 +602,14 @@ export function createPublisher(deps: {
         if (!entry.isDirectory()) continue;
         const workspace = path.join(paths.staging, entry.name);
         const job = repos.jobs.byId(entry.name as JobId);
-        if (job !== null && (job.state === "running" || job.state === "cancelling")) {
+        // AC-OPS-04: a directory referenced by a queued, running or cancelling
+        // job is in flight and must be retained.
+        if (
+          job !== null &&
+          (job.state === "queued" ||
+            job.state === "running" ||
+            job.state === "cancelling")
+        ) {
           report.keptInFlight += 1;
           continue;
         }
