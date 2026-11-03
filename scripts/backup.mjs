@@ -48,6 +48,8 @@ function expandHome(value) {
  * longest existing prefix and append the not-yet-created tail. A plain
  * `realpathSync` would leave a fresh target spelled through a `/var` →
  * `/private/var` alias, which would no longer match the rewritten columns.
+ * A dangling symlink is rejected rather than followed, exactly as the
+ * TypeScript module does.
  */
 function canonicalize(candidate) {
   let current = path.resolve(candidate);
@@ -57,6 +59,13 @@ function canonicalize(candidate) {
       const real = fs.realpathSync(current);
       return tail.length === 0 ? real : path.join(real, ...tail.reverse());
     } catch {
+      if (fs.lstatSync(current, { throwIfNoEntry: false }) !== undefined) {
+        throw failure(
+          "out_of_scope_path",
+          "a path outside the data directory was rejected",
+          { path: candidate, reason: "dangling_symlink" },
+        );
+      }
       const parent = path.dirname(current);
       if (parent === current) return path.resolve(candidate);
       tail.push(path.basename(current));
@@ -386,6 +395,115 @@ function rewritePath(value, oldRoot, newRoot) {
   return value;
 }
 
+/** True when a `..` segment appears in either separator style. */
+function hasTraversal(value) {
+  return value.split(/[\\/]+/u).some((segment) => segment === "..");
+}
+
+/** True when `candidate` resolves inside `root` (it may be relative). */
+function isInside(root, candidate) {
+  if (typeof candidate !== "string" || candidate === "") return false;
+  const relative = path.relative(root, path.resolve(root, candidate));
+  return (
+    relative !== ".." &&
+    !relative.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(relative)
+  );
+}
+
+/**
+ * Mirror of `assertInsideDataDir` (`src/learning/config/paths.ts`).
+ *
+ * The `.mjs` scripts cannot import the TypeScript module, so the sandbox check
+ * is mirrored here: reject a `..` segment, an absolute path outside the root,
+ * a relative path that resolves outside it, and any symlink on the path whose
+ * real target leaves the root. Restore runs every archived absolute path
+ * through this before it deletes, clones or creates anything.
+ *
+ * @returns {string} the canonical absolute path, guaranteed inside `paths.root`
+ */
+export function assertInsideRoot(paths, candidate) {
+  if (
+    typeof candidate !== "string" ||
+    candidate === "" ||
+    candidate.includes("\0")
+  ) {
+    throw failure(
+      "out_of_scope_path",
+      "a restored path is outside the data directory",
+      { path: String(candidate) },
+    );
+  }
+  if (hasTraversal(candidate)) {
+    throw failure(
+      "out_of_scope_path",
+      "a restored path is outside the data directory",
+      { path: candidate },
+    );
+  }
+
+  const root = canonicalize(paths.root);
+  const resolved = path.resolve(root, candidate);
+  if (!isInside(root, resolved)) {
+    throw failure(
+      "out_of_scope_path",
+      "a restored path is outside the data directory",
+      { path: candidate },
+    );
+  }
+
+  const canonical = canonicalize(resolved);
+  if (!isInside(root, canonical)) {
+    throw failure(
+      "out_of_scope_path",
+      "a restored path is outside the data directory",
+      { path: candidate, reason: "symlink_escape" },
+    );
+  }
+  return canonical;
+}
+
+/**
+ * Maps one archived absolute path column onto the restore root.
+ *
+ * An absolute path under `manifest.sourceRoot` is rewritten. Any other
+ * absolute path (the data directory was copied or moved before the backup, so
+ * the column still names the old root) falls back to the canonical derived
+ * location inside the new root — `mirrors/<repoId>.git`,
+ * `work/<repoId>/<sha>` or `knowledge/<generation>` — so the restored database
+ * is self-contained and never points back at the source machine. Every result
+ * is validated before the caller writes to it.
+ */
+function resolveRestoredPath(paths, value, oldRoot, fallback) {
+  const rewritten =
+    typeof value === "string" && value !== ""
+      ? rewritePath(value, oldRoot, paths.root)
+      : "";
+  if (rewritten !== "" && isInside(paths.root, rewritten)) {
+    return assertInsideRoot(paths, rewritten);
+  }
+  return assertInsideRoot(paths, fallback);
+}
+
+/**
+ * The portion of an archived `content_dir` below the data directory's
+ * `knowledge` member, so a stale absolute path still lands on the archived
+ * generation tree without repeating the old root.
+ */
+function knowledgeRelativeDir(value, generationId) {
+  if (typeof value === "string" && value !== "") {
+    const segments = toPosix(value)
+      .split("/")
+      .filter((segment) => segment !== "");
+    const index = segments.lastIndexOf("knowledge");
+    const tail = index === -1 ? [] : segments.slice(index + 1);
+    if (tail.length > 0 && !tail.some((segment) => segment === "..")) {
+      return path.join(...tail);
+    }
+  }
+  return generationId;
+}
+
 function copyFileAtomic(source, target) {
   fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
   const temporary = `${target}.tmp-${process.pid}`;
@@ -400,6 +518,13 @@ function copyFileAtomic(source, target) {
  * `snapshots.worktree_path`, `generations.content_dir`), rebuilds every mirror
  * from its bundle and recreates the detached snapshot worktrees, so lesson,
  * conversation and source reads work over HTTP exactly as before the backup.
+ *
+ * The restore is self-contained: an archived absolute path that is not under
+ * `manifest.sourceRoot` (the data directory was copied or moved before the
+ * backup) is replaced by the canonical location under the new root instead of
+ * being used verbatim, and every path is sandbox-checked with
+ * `assertInsideRoot` before anything is deleted, cloned or created. A restore
+ * therefore never touches the machine the archive came from.
  *
  * @param {{fromDir: string, dataDir?: string, env?: NodeJS.ProcessEnv}} options
  */
@@ -455,7 +580,13 @@ export async function restoreBackup(options) {
 
   const oldRoot =
     typeof manifest.sourceRoot === "string" ? manifest.sourceRoot : "";
-  const newRoot = paths.root;
+  if (oldRoot === "") {
+    throw failure(
+      "manifest_invalid",
+      "manifest.json does not record the source data directory",
+      { fromDir },
+    );
+  }
 
   const { DatabaseSync } = await import("node:sqlite");
   const database = new DatabaseSync(paths.db);
@@ -472,12 +603,20 @@ export async function restoreBackup(options) {
       for (const row of database
         .prepare("SELECT repo_id, mirror_path FROM repos")
         .all()) {
-        const rewritten = rewritePath(row.mirror_path, oldRoot, newRoot);
-        if (rewritten !== row.mirror_path) {
-          updateRepo.run(rewritten, row.repo_id);
+        // Validated by `resolveRestoredPath`: a stale or hostile archived path
+        // can never make the restore write, delete or clone outside the new
+        // root; it is replaced by the canonical derived location instead.
+        const mirrorPath = resolveRestoredPath(
+          paths,
+          row.mirror_path,
+          oldRoot,
+          path.join(paths.mirrors, `${row.repo_id}.git`),
+        );
+        if (mirrorPath !== row.mirror_path) {
+          updateRepo.run(mirrorPath, row.repo_id);
           restored.repos += 1;
         }
-        repoRows.push({ ...row, mirrorPath: rewritten });
+        repoRows.push({ ...row, mirrorPath });
       }
 
       const updateSnapshot = database.prepare(
@@ -486,15 +625,20 @@ export async function restoreBackup(options) {
       for (const row of database
         .prepare("SELECT repo_id, commit_sha, worktree_path FROM snapshots")
         .all()) {
-        const rewritten = rewritePath(row.worktree_path, oldRoot, newRoot);
-        if (rewritten !== row.worktree_path) {
-          updateSnapshot.run(rewritten, row.repo_id, row.commit_sha);
+        const worktreePath = resolveRestoredPath(
+          paths,
+          row.worktree_path,
+          oldRoot,
+          path.join(paths.work, row.repo_id, row.commit_sha),
+        );
+        if (worktreePath !== row.worktree_path) {
+          updateSnapshot.run(worktreePath, row.repo_id, row.commit_sha);
           restored.snapshots += 1;
         }
         snapshotRows.push({
           repoId: row.repo_id,
           commitSha: row.commit_sha,
-          worktreePath: rewritten,
+          worktreePath,
         });
       }
 
@@ -504,9 +648,17 @@ export async function restoreBackup(options) {
       for (const row of database
         .prepare("SELECT generation_id, content_dir FROM generations")
         .all()) {
-        const rewritten = rewritePath(row.content_dir, oldRoot, newRoot);
-        if (rewritten !== row.content_dir) {
-          updateGeneration.run(rewritten, row.generation_id);
+        const contentDir = resolveRestoredPath(
+          paths,
+          row.content_dir,
+          oldRoot,
+          path.join(
+            paths.knowledge,
+            knowledgeRelativeDir(row.content_dir, row.generation_id),
+          ),
+        );
+        if (contentDir !== row.content_dir) {
+          updateGeneration.run(contentDir, row.generation_id);
           restored.generations += 1;
         }
       }
@@ -524,19 +676,27 @@ export async function restoreBackup(options) {
   }
 
   // Rebuild mirrors from the bundles, then the detached worktrees from the
-  // rewritten snapshot rows.
+  // rewritten snapshot rows. Every destination is re-asserted inside the root
+  // here as well: this is the only place that deletes or runs Git, so a bug in
+  // the mapping above must not be able to reach outside the data directory.
   const mirrorByRepo = new Map();
   const worktrees = [];
   const failures = [];
   for (const row of repoRows) {
-    const target = path.isAbsolute(row.mirrorPath)
-      ? row.mirrorPath
-      : path.join(paths.mirrors, `${row.repo_id}.git`);
+    let target;
+    try {
+      target = assertInsideRoot(paths, row.mirrorPath);
+    } catch (error) {
+      failures.push({ repoId: row.repo_id, reason: error.code ?? "failed" });
+      continue;
+    }
     mirrorByRepo.set(row.repo_id, target);
     const bundle = path.join(fromDir, "git-objects", `${row.repo_id}.bundle`);
     if (fs.existsSync(bundle)) {
-      if (fs.existsSync(target))
+      if (fs.existsSync(target)) {
+        assertInsideRoot(paths, target);
         fs.rmSync(target, { recursive: true, force: true });
+      }
       fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
       runGit(["clone", "--mirror", bundle, target], { env, cwd: REPO_ROOT });
     } else if (!fs.existsSync(target)) {
@@ -554,8 +714,19 @@ export async function restoreBackup(options) {
       });
       continue;
     }
-    if (fs.existsSync(row.worktreePath)) continue;
-    fs.mkdirSync(path.dirname(row.worktreePath), {
+    let worktreePath;
+    try {
+      worktreePath = assertInsideRoot(paths, row.worktreePath);
+    } catch (error) {
+      failures.push({
+        repoId: row.repoId,
+        commitSha: row.commitSha,
+        reason: error.code ?? "failed",
+      });
+      continue;
+    }
+    if (fs.existsSync(worktreePath)) continue;
+    fs.mkdirSync(path.dirname(worktreePath), {
       recursive: true,
       mode: 0o700,
     });
@@ -567,12 +738,12 @@ export async function restoreBackup(options) {
           "worktree",
           "add",
           "--detach",
-          row.worktreePath,
+          worktreePath,
           row.commitSha,
         ],
         { env, cwd: REPO_ROOT },
       );
-      worktrees.push(row.worktreePath);
+      worktrees.push(worktreePath);
     } catch (error) {
       failures.push({
         repoId: row.repoId,

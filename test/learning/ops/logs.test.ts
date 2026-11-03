@@ -1,6 +1,8 @@
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -17,7 +19,11 @@ import { createClock } from "../../../src/learning/testing/clock.ts";
  */
 
 const CANARY = "ghp_canary_0123456789abcdef";
+const REPO_ROOT = fileURLToPath(new URL("../../..", import.meta.url));
+const TSX = path.join(REPO_ROOT, "node_modules", "tsx", "dist", "cli.mjs");
+const CLI = path.join(REPO_ROOT, "src", "learning", "api", "cli.ts");
 const tempDirs: string[] = [];
+const children: { kill: (signal?: NodeJS.Signals) => boolean }[] = [];
 
 function makeTempDir(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "codetrail-logs-"));
@@ -26,6 +32,13 @@ function makeTempDir(): string {
 }
 
 afterEach(() => {
+  for (const child of children.splice(0)) {
+    try {
+      child.kill("SIGKILL");
+    } catch {
+      // Already exited.
+    }
+  }
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -130,4 +143,68 @@ describe("structured JSON logs", () => {
       logger.event({ event: "shutdown", level: "info" }),
     ).not.toThrow();
   });
+
+  it("writes the booted CLI's own lifecycle events as one JSON object per line", async () => {
+    const dir = makeTempDir();
+    const child = spawn(process.execPath, [TSX, CLI], {
+      cwd: REPO_ROOT,
+      env: {
+        ...process.env,
+        CODETRAIL_DATA_DIR: dir,
+        CODETRAIL_PORT: "0",
+        CODETRAIL_GITHUB_TOKEN: CANARY,
+        OPENWIKI_TELEMETRY_DISABLED: "1",
+        DO_NOT_TRACK: "1",
+        LANGCHAIN_TRACING_V2: "false",
+        GIT_LFS_SKIP_SMUDGE: "1",
+        GIT_TERMINAL_PROMPT: "0",
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    children.push(child);
+
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk: Buffer) => {
+      stdout += chunk.toString("utf8");
+    });
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString("utf8");
+    });
+    const exited = new Promise<{ code: number | null }>((resolve) => {
+      child.once("exit", (code) => resolve({ code }));
+    });
+
+    const deadline = Date.now() + 30_000;
+    while (
+      Date.now() < deadline &&
+      !/^http:\/\/127\.0\.0\.1:\d+\s*$/mu.test(stdout) &&
+      child.exitCode === null
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    expect(stdout, stderr).toMatch(/http:\/\/127\.0\.0\.1:\d+/u);
+
+    child.kill("SIGTERM");
+    const exit = await Promise.race([
+      exited,
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 10_000)),
+    ]);
+    if (exit === null) child.kill("SIGKILL");
+    expect(exit, stderr).not.toBeNull();
+    expect(exit?.code, stderr).toBe(0);
+
+    const logFile = path.join(dir, "logs", "codetrail.jsonl");
+    expect(fs.existsSync(logFile)).toBe(true);
+    const lines = readLines(logFile);
+    expect(lines.map((line) => line.event)).toEqual(
+      expect.arrayContaining(["server_started", "shutdown"]),
+    );
+    for (const line of lines) {
+      expect(typeof line.event).toBe("string");
+      expect(typeof line.level).toBe("string");
+      expect(typeof line.at).toBe("string");
+    }
+    expect(fs.readFileSync(logFile, "utf8")).not.toContain(CANARY);
+  }, 60_000);
 });

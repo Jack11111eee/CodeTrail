@@ -76,6 +76,8 @@ interface Seed {
   orphanKnowledge: string;
   queuedStaging: string;
   runningStaging: string;
+  cancellingStaging: string;
+  completedStaging: string;
   mirror: string;
   worktree: string;
 }
@@ -182,6 +184,7 @@ function seed(): Seed {
   };
   insertJob("j_queued", "queued", "dedupe-queued");
   insertJob("j_running", "running", "dedupe-running");
+  insertJob("j_cancelling", "cancelling", "dedupe-cancelling");
   insertJob("j_completed", "completed", "dedupe-completed");
 
   const orphanStaging = stagingPath(paths, "j_orphan" as JobId);
@@ -190,6 +193,8 @@ function seed(): Seed {
   writeFile(path.join(queuedStaging, "tree", "keep.txt"), "queued");
   const runningStaging = stagingPath(paths, "j_running" as JobId);
   writeFile(path.join(runningStaging, "tree", "keep.txt"), "running");
+  const cancellingStaging = stagingPath(paths, "j_cancelling" as JobId);
+  writeFile(path.join(cancellingStaging, "tree", "keep.txt"), "cancelling");
   const completedStaging = stagingPath(paths, "j_completed" as JobId);
   writeFile(path.join(completedStaging, "tree", "junk.txt"), "completed");
 
@@ -212,6 +217,8 @@ function seed(): Seed {
     orphanKnowledge,
     queuedStaging,
     runningStaging,
+    cancellingStaging,
+    completedStaging,
     mirror,
     worktree,
   };
@@ -239,17 +246,22 @@ describe("gc", () => {
     const report = runGcScript(seeded.dataDir);
 
     expect(report.removedWorkspaces).toContain(seeded.orphanStaging);
+    // A completed job's workspace is unreferenced too, not only one with no row.
+    expect(report.removedWorkspaces).toContain(seeded.completedStaging);
     expect(report.removedWorkspaces).not.toContain(seeded.queuedStaging);
     expect(report.removedWorkspaces).not.toContain(seeded.runningStaging);
-    expect(report.removedKnowledge).toContain("g_orphan");
+    expect(report.removedWorkspaces).not.toContain(seeded.cancellingStaging);
+    expect(report.removedKnowledge).toEqual(["g_orphan"]);
     expect(report.keptPublished).toBe(1);
-    expect(report.keptInFlight).toBe(2);
+    expect(report.keptInFlight).toBe(3);
     expect(report.bytesFreed).toBeGreaterThan(0);
 
     expect(fs.existsSync(seeded.orphanStaging)).toBe(false);
+    expect(fs.existsSync(seeded.completedStaging)).toBe(false);
     expect(fs.existsSync(seeded.orphanKnowledge)).toBe(false);
     expect(fs.existsSync(seeded.queuedStaging)).toBe(true);
     expect(fs.existsSync(seeded.runningStaging)).toBe(true);
+    expect(fs.existsSync(seeded.cancellingStaging)).toBe(true);
     expect(fs.existsSync(seeded.mirror)).toBe(true);
     expect(fs.existsSync(seeded.worktree)).toBe(true);
 
@@ -266,7 +278,7 @@ describe("gc", () => {
     expect(second.removedWorkspaces).toEqual([]);
     expect(second.removedKnowledge).toEqual([]);
     expect(second.keptPublished).toBe(1);
-    expect(second.keptInFlight).toBe(2);
+    expect(second.keptInFlight).toBe(3);
     expect(second.bytesFreed).toBe(0);
     expect(fs.existsSync(seeded.publishedFile)).toBe(true);
     expect(sha256(seeded.publishedFile)).toBe(seeded.publishedSha);

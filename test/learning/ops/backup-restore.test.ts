@@ -358,6 +358,152 @@ function runRestore(fixture: Fixture, target = fixture.restoredDir) {
   ]);
 }
 
+function isUnder(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return (
+    relative !== ".." &&
+    !relative.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(relative)
+  );
+}
+
+/**
+ * Relative path -> content hash (files), `dir` marker (directories) or symlink
+ * target for every entry under `root`. Comparing two snapshots proves a
+ * restore left a tree byte-for-byte untouched.
+ */
+function snapshotTree(root: string, prefix = ""): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+    const relative = prefix === "" ? entry.name : `${prefix}/${entry.name}`;
+    const absolute = path.join(root, entry.name);
+    if (entry.isSymbolicLink()) {
+      out[relative] = `symlink:${fs.readlinkSync(absolute)}`;
+    } else if (entry.isDirectory()) {
+      out[`${relative}/`] = "dir";
+      Object.assign(out, snapshotTree(absolute, relative));
+    } else if (entry.isFile()) {
+      out[relative] = sha256File(absolute);
+    }
+  }
+  return out;
+}
+
+/**
+ * Proves a restored data directory is readable over HTTP (`AC-OPS-03`): every
+ * absolute path column resolves inside the restore root, then lesson list and
+ * detail, conversation messages and a repo source link all come back.
+ */
+async function verifyRestoredState(
+  fixture: Fixture,
+  target: string,
+): Promise<void> {
+  const restoredPaths = resolveDataPaths({
+    ...process.env,
+    CODETRAIL_DATA_DIR: target,
+  });
+  const clock = createClock(NOW);
+  const db = openDatabase({ file: restoredPaths.db, clock });
+  dbs.push(db);
+  migrate(db);
+  const repos = createRepositories(db);
+
+  // Absolute path columns were rewritten off the old root and are self-
+  // contained: the restored database never points outside the new root.
+  const mirrorPath = repos.repos.byId(fixture.repoId)?.mirrorPath ?? "";
+  const worktreePath =
+    repos.snapshots.byCommit(fixture.repoId, fixture.commitSha)?.worktreePath ??
+    "";
+  const contentDir =
+    repos.generations.byId(fixture.generationId)?.contentDir ?? "";
+  expect(isUnder(restoredPaths.root, mirrorPath)).toBe(true);
+  expect(isUnder(restoredPaths.root, worktreePath)).toBe(true);
+  expect(isUnder(restoredPaths.root, contentDir)).toBe(true);
+  expect(fs.existsSync(contentDir)).toBe(true);
+
+  const conversations = createConversationService({ db, repos, clock });
+  const snapshotService = createSnapshotService({
+    paths: restoredPaths,
+    repos,
+    clock,
+  });
+  const external = createExternalDocService({ paths: restoredPaths, clock });
+  const registry = createSourceRegistry({
+    clock,
+    sources: repos.sources,
+    generations: repos.generations,
+  });
+  const session = createSessionStore(restoredPaths);
+  const deps = {
+    paths: restoredPaths,
+    clock,
+    db,
+    repos,
+    conversations,
+    snapshotService,
+    external,
+    registry,
+    session,
+    model: null,
+    removal: { state: () => "active" },
+  } as unknown as AppDeps;
+
+  registerRouteModule(generationsRoutes);
+  registerRouteModule(conversationsModule);
+  const server = await createLearningServer({
+    paths: restoredPaths,
+    port: 0,
+    clock,
+    deps,
+  });
+  servers.push(server);
+  const harness = await startHarness({ baseUrl: server.url });
+
+  const lessons = await harness.request(
+    `/api/generations/${fixture.generationId}/lessons`,
+  );
+  expect(lessons.status).toBe(200);
+  const lessonList = lessons.json as {
+    lessons: { lessonId: string; title: string }[];
+  };
+  expect(lessonList.lessons.map((lesson) => lesson.lessonId)).toContain(
+    fixture.lessonId,
+  );
+
+  const detail = await harness.request(
+    `/api/generations/${fixture.generationId}/lessons/${fixture.lessonId}`,
+  );
+  expect(detail.status).toBe(200);
+  expect(
+    (detail.json as { lesson: { lessonId: string } }).lesson.lessonId,
+  ).toBe(fixture.lessonId);
+
+  const messages = await harness.request(
+    `/api/conversations/${fixture.conversationId}/messages`,
+  );
+  expect(messages.status).toBe(200);
+  const messageList = messages.json as {
+    messages: { content: string }[];
+  };
+  expect(messageList.messages.map((message) => message.content)).toContain(
+    "这个文件返回什么？",
+  );
+
+  // The source link only resolves when the mirror bundle and detached
+  // worktree were rebuilt at the restored paths.
+  const source = await harness.request(
+    `/api/generations/${fixture.generationId}/sources/${fixture.sourceId}`,
+  );
+  expect(source.status).toBe(200);
+  const sourceView = source.json as { content: string; availability: string };
+  expect(sourceView.availability).toBe("available");
+  expect(sourceView.content).toContain("export const answer = 42;");
+
+  for (const response of [lessons, detail, messages, source]) {
+    expect(response.text).not.toContain(CANARY);
+  }
+}
+
 describe("backup and restore", () => {
   it("archives the database, knowledge and git objects with no token canary", async () => {
     const fixture = await seed();
@@ -395,6 +541,41 @@ describe("backup and restore", () => {
       ).toBe(file.sha256);
     }
 
+    // The archive excludes every secret-bearing file by name.
+    expect(listed).not.toContain("credentials.json");
+    expect(listed).not.toContain("session.json");
+    expect(listed.some((file) => file.startsWith("logs/"))).toBe(false);
+
+    // `VACUUM INTO` produced a readable database (a raw WAL copy could be
+    // torn); the archived lessons are present and the canary is absent from
+    // both the database bytes and the lesson JSON.
+    const { DatabaseSync } = await import("node:sqlite");
+    const snapshot = new DatabaseSync(
+      path.join(fixture.backupDir, "db", "codetrail.sqlite"),
+      { readOnly: true },
+    );
+    try {
+      const row = snapshot
+        .prepare("SELECT COUNT(*) AS count FROM lessons")
+        .get() as { count: number };
+      expect(row.count).toBe(1);
+    } finally {
+      snapshot.close();
+    }
+    expect(
+      fs
+        .readFileSync(path.join(fixture.backupDir, "db", "codetrail.sqlite"))
+        .includes(Buffer.from(CANARY)),
+    ).toBe(false);
+    const sourceLesson = path.join(
+      fs.realpathSync(fixture.dataDir),
+      "knowledge",
+      fixture.generationId,
+      "lessons",
+      `${fixture.lessonId}.json`,
+    );
+    expect(fs.readFileSync(sourceLesson, "utf8")).not.toContain(CANARY);
+
     // No archive file carries the token canary.
     for (const relative of listFiles(fixture.backupDir)) {
       const text = fs.readFileSync(
@@ -411,114 +592,75 @@ describe("backup and restore", () => {
     const restored = runRestore(fixture);
     expect(restored.status, restored.stderr).toBe(0);
 
+    await verifyRestoredState(fixture, fixture.restoredDir);
+  });
+
+  it("restores a copied data dir without touching the original root", async () => {
+    // The archive is taken from a *copy* of the live data dir, so the archived
+    // absolute paths name the original root, not `manifest.sourceRoot`. Using
+    // them verbatim would make the restore delete and re-clone inside the live
+    // source directory; the canonical fallbacks must keep it self-contained.
+    const fixture = await seed();
+    const copiedDir = path.join(fixture.base, "copied");
+    fs.cpSync(fixture.dataDir, copiedDir, { recursive: true });
+
+    const archive = path.join(fixture.base, "copied-backup");
+    const backup = runScript(BACKUP_SCRIPT, [
+      "--out",
+      archive,
+      "--data-dir",
+      copiedDir,
+      "--json",
+    ]);
+    expect(backup.status, backup.stderr).toBe(0);
+
+    const restoredDir = path.join(fixture.base, "restored-copied");
+    const beforeSource = snapshotTree(fixture.dataDir);
+    const restore = runScript(RESTORE_SCRIPT, [
+      "--from",
+      archive,
+      "--data-dir",
+      restoredDir,
+      "--json",
+    ]);
+    expect(restore.status, restore.stderr).toBe(0);
+
+    // (i) Nothing outside the restore data dir was removed or modified. The
+    // original root is the witness: the stale archived paths pointed there.
+    expect(snapshotTree(fixture.dataDir)).toEqual(beforeSource);
+
+    // (ii) + (iii): every column resolves under the restore root and the
+    // restored lessons, conversations and source links are readable.
     const restoredPaths = resolveDataPaths({
       ...process.env,
-      CODETRAIL_DATA_DIR: fixture.restoredDir,
+      CODETRAIL_DATA_DIR: restoredDir,
     });
-    const clock = createClock(NOW);
-    const db = openDatabase({ file: restoredPaths.db, clock });
-    dbs.push(db);
-    migrate(db);
-    const repos = createRepositories(db);
-
-    // Absolute path columns were rewritten off the old root.
-    expect(
-      repos.repos
-        .byId(fixture.repoId)
-        ?.mirrorPath.startsWith(restoredPaths.root),
-    ).toBe(true);
-    expect(
-      repos.snapshots
-        .byCommit(fixture.repoId, fixture.commitSha)
-        ?.worktreePath.startsWith(restoredPaths.root),
-    ).toBe(true);
-    expect(
-      repos.generations
-        .byId(fixture.generationId)
-        ?.contentDir.startsWith(restoredPaths.root),
-    ).toBe(true);
-
-    const conversations = createConversationService({ db, repos, clock });
-    const snapshotService = createSnapshotService({
-      paths: restoredPaths,
-      repos,
-      clock,
-    });
-    const external = createExternalDocService({ paths: restoredPaths, clock });
-    const registry = createSourceRegistry({
-      clock,
-      sources: repos.sources,
-      generations: repos.generations,
-    });
-    const session = createSessionStore(restoredPaths);
-    const deps = {
-      paths: restoredPaths,
-      clock,
-      db,
-      repos,
-      conversations,
-      snapshotService,
-      external,
-      registry,
-      session,
-      model: null,
-      removal: { state: () => "active" },
-    } as unknown as AppDeps;
-
-    registerRouteModule(generationsRoutes);
-    registerRouteModule(conversationsModule);
-    const server = await createLearningServer({
-      paths: restoredPaths,
-      port: 0,
-      clock,
-      deps,
-    });
-    servers.push(server);
-    const harness = await startHarness({ baseUrl: server.url });
-
-    const lessons = await harness.request(
-      `/api/generations/${fixture.generationId}/lessons`,
-    );
-    expect(lessons.status).toBe(200);
-    const lessonList = lessons.json as {
-      lessons: { lessonId: string; title: string }[];
-    };
-    expect(lessonList.lessons.map((lesson) => lesson.lessonId)).toContain(
-      fixture.lessonId,
-    );
-
-    const detail = await harness.request(
-      `/api/generations/${fixture.generationId}/lessons/${fixture.lessonId}`,
-    );
-    expect(detail.status).toBe(200);
-    expect(
-      (detail.json as { lesson: { lessonId: string } }).lesson.lessonId,
-    ).toBe(fixture.lessonId);
-
-    const messages = await harness.request(
-      `/api/conversations/${fixture.conversationId}/messages`,
-    );
-    expect(messages.status).toBe(200);
-    const messageList = messages.json as {
-      messages: { content: string }[];
-    };
-    expect(messageList.messages.map((message) => message.content)).toContain(
-      "这个文件返回什么？",
-    );
-
-    // The source link only resolves when the mirror bundle and detached
-    // worktree were rebuilt at the restored paths.
-    const source = await harness.request(
-      `/api/generations/${fixture.generationId}/sources/${fixture.sourceId}`,
-    );
-    expect(source.status).toBe(200);
-    const sourceView = source.json as { content: string; availability: string };
-    expect(sourceView.availability).toBe("available");
-    expect(sourceView.content).toContain("export const answer = 42;");
-
-    for (const response of [lessons, detail, messages, source]) {
-      expect(response.text).not.toContain(CANARY);
+    const { DatabaseSync } = await import("node:sqlite");
+    const snapshot = new DatabaseSync(restoredPaths.db, { readOnly: true });
+    try {
+      const reposRow = snapshot
+        .prepare("SELECT mirror_path FROM repos WHERE repo_id = ?")
+        .get(fixture.repoId) as { mirror_path: string };
+      const snapshotsRow = snapshot
+        .prepare(
+          "SELECT worktree_path FROM snapshots WHERE repo_id = ? AND commit_sha = ?",
+        )
+        .get(fixture.repoId, fixture.commitSha) as { worktree_path: string };
+      const generationRow = snapshot
+        .prepare("SELECT content_dir FROM generations WHERE generation_id = ?")
+        .get(fixture.generationId) as { content_dir: string };
+      for (const value of [
+        reposRow.mirror_path,
+        snapshotsRow.worktree_path,
+        generationRow.content_dir,
+      ]) {
+        expect(isUnder(restoredPaths.root, value)).toBe(true);
+      }
+    } finally {
+      snapshot.close();
     }
+
+    await verifyRestoredState(fixture, restoredDir);
   });
 
   it("refuses a non-empty restore target", async () => {
@@ -531,5 +673,61 @@ describe("backup and restore", () => {
     const result = runRestore(fixture, target);
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("target_not_empty");
+  });
+
+  it("refuses a non-empty backup target instead of overwriting it", async () => {
+    const fixture = await seed();
+    fs.mkdirSync(fixture.backupDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(fixture.backupDir, "keep.txt"),
+      "not empty",
+      "utf8",
+    );
+
+    const result = runScript(BACKUP_SCRIPT, [
+      "--out",
+      fixture.backupDir,
+      "--data-dir",
+      fixture.dataDir,
+      "--json",
+    ]);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("target_not_empty");
+    expect(
+      fs.readFileSync(path.join(fixture.backupDir, "keep.txt"), "utf8"),
+    ).toBe("not empty");
+  });
+
+  it("rejects a data directory with no database", () => {
+    const base = makeTempDir();
+    const dataDir = path.join(base, "empty-data");
+    fs.mkdirSync(dataDir);
+    const outDir = path.join(base, "out");
+
+    const result = runScript(BACKUP_SCRIPT, [
+      "--out",
+      outDir,
+      "--data-dir",
+      dataDir,
+    ]);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("database_missing");
+    expect(fs.existsSync(outDir)).toBe(false);
+  });
+
+  it("rejects an archive with an invalid manifest", () => {
+    const base = makeTempDir();
+    const archive = path.join(base, "archive");
+    fs.mkdirSync(archive);
+    fs.writeFileSync(path.join(archive, "manifest.json"), "{not json", "utf8");
+
+    const result = runScript(RESTORE_SCRIPT, [
+      "--from",
+      archive,
+      "--data-dir",
+      path.join(base, "target"),
+    ]);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("manifest_invalid");
   });
 });
