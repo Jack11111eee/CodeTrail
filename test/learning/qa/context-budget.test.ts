@@ -231,3 +231,48 @@ describe("summarizeMessages", () => {
     expect(AT).toBe("2026-01-01T00:00:00.000Z");
   });
 });
+
+describe("assembleContext empty and zero-budget boundaries", () => {
+  const preferences = {
+    explainLevel: "plain_first" as const,
+    background: null,
+    language: "zh" as const,
+    version: 0,
+  };
+
+  it("emits only preferences for an empty conversation with no selection", () => {
+    const context = assembleContext({
+      selection: null,
+      messages: [],
+      retrieved: [],
+      preferences,
+      budget: { maxInputTokens: 100, reserveOutputTokens: 0 },
+    });
+
+    expect(context.sections.map((section) => section.role)).toEqual([
+      "preferences",
+    ]);
+    expect(context.truncated).toBe(false);
+    expect(context.uncovered).toEqual([]);
+    expect(context.totalTokens).toBe(estimateTokens(context.sections[0].text));
+  });
+
+  it("reports everything as uncovered when no budget is left", () => {
+    const context = assembleContext({
+      selection: { moduleId: "m_snapshot" },
+      messages: [
+        message({ messageId: "m_1", role: "user", content: "问题" }),
+      ],
+      retrieved: [hit("snapshot cache eviction")],
+      preferences,
+      budget: { maxInputTokens: 0, reserveOutputTokens: 0 },
+    });
+
+    expect(context.totalTokens).toBe(0);
+    expect(context.sections.every((section) => section.tokens === 0)).toBe(true);
+    expect(context.truncated).toBe(true);
+    expect(context.uncovered).toEqual(
+      expect.arrayContaining(["selection", "retrieval: guide/intro", "preferences"]),
+    );
+  });
+});

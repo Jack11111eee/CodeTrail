@@ -6,6 +6,7 @@ import { createRepositories, openDatabase } from "../../../src/learning/store/in
 import {
   answerEntry,
   cleanupTempDirs,
+  collect,
   createHarness,
   publishGeneration,
   scriptDir,
@@ -101,6 +102,53 @@ describe("cancel and restart", () => {
       const summary = summarizeMessages(reread);
       expect(summary.text).not.toContain("这是一段很长的回答");
       reopened.close();
+    } finally {
+      harness.db.close();
+    }
+  });
+
+  it("cancels a turn whose signal is already aborted, before any retrieval", async () => {
+    const dir = scriptDir([
+      answerEntry({ answer: "不会被生成。", conclusion: "unknown", citations: [] }),
+    ]);
+    const harness = createHarness({
+      modelDir: dir,
+      hits: { g_abort: [] },
+      filesByGeneration: { g_abort: FILES },
+      generationOfCommit: { [COMMIT_A]: "g_abort" },
+    });
+    const fixture = publishGeneration(harness.db, {
+      generationId: "g_abort",
+      files: FILES,
+    });
+    const conversation = await harness.conversations.create({
+      generationIds: [fixture.generationId],
+    });
+    const controller = new AbortController();
+    controller.abort();
+
+    try {
+      const events = await collect(
+        harness.answers.answer({
+          conversationId: conversation.conversationId,
+          text: "解释一下",
+          selection: null,
+          signal: controller.signal,
+        }),
+      );
+
+      expect(events.at(-1)).toMatchObject({
+        type: "done",
+        status: "cancelled",
+        unknownReason: "cancelled",
+      });
+      expect(harness.retriever.calls).toHaveLength(0);
+      const assistant = (
+        await harness.conversations.get(conversation.conversationId)
+      )!.messages.find((message) => message.role === "assistant")!;
+      expect(assistant.status).toBe("cancelled");
+      expect(assistant.answerPhase).toBe("cancelled");
+      expect(assistant.content).toBe("");
     } finally {
       harness.db.close();
     }

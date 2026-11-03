@@ -4,6 +4,7 @@ import type {
   GenerationId,
   RetrievalHit,
 } from "../../../src/learning/contracts/index.ts";
+import { repoSourceId } from "../../../src/learning/evidence/index.ts";
 import { assembleContext } from "../../../src/learning/qa/context.ts";
 import {
   assembleMultiContext,
@@ -20,6 +21,7 @@ import {
   publishedRefOf,
   scriptDir,
   sourceHit,
+  toolEntry,
   COMMIT_A,
   COMMIT_B,
   REPO_ID,
@@ -227,6 +229,78 @@ describe("two-generation conversations", () => {
           generationIds: ["g_staged" as GenerationId],
         }),
       ).rejects.toMatchObject({ code: "unpublished_generation" });
+    } finally {
+      harness.db.close();
+    }
+  });
+
+  it("attributes a citation for a file read through a tool to its own generation", async () => {
+    const sourceIdB = repoSourceId("src/b.ts", COMMIT_B, null);
+    const dir = scriptDir([
+      toolEntry(
+        [
+          {
+            name: "read_snapshot_file",
+            args: { path: "src/b.ts", generationId: "g_b" },
+          },
+        ],
+        1,
+      ),
+      answerEntry(
+        {
+          answer: "b 导出 2。",
+          conclusion: "code_fact",
+          citations: [{ sourceId: sourceIdB, generationId: "g_b" }],
+        },
+        2,
+      ),
+    ]);
+    const harness = createHarness({
+      modelDir: dir,
+      hits: { g_a: [], g_b: [] },
+      filesByGeneration: { g_a: FILES_A, g_b: FILES_B },
+      generationOfCommit: { [COMMIT_A]: "g_a", [COMMIT_B]: "g_b" },
+    });
+    const fixtureA = publishGeneration(harness.db, {
+      generationId: "g_a",
+      sources: [{ path: "src/a.ts" }],
+      files: FILES_A,
+    });
+    const fixtureB = publishGeneration(harness.db, {
+      generationId: "g_b",
+      repoId: REPO_B,
+      projectId: "p_second",
+      commitSha: COMMIT_B,
+      sources: [{ path: "src/b.ts" }],
+      files: FILES_B,
+    });
+    try {
+      const conversation = await harness.conversations.create({
+        generationIds: [fixtureA.generationId, fixtureB.generationId],
+      });
+      const events = await collect(
+        harness.answers.answer({
+          conversationId: conversation.conversationId,
+          text: "b 是什么？",
+          selection: null,
+          signal: new AbortController().signal,
+        }),
+      );
+
+      expect(events.at(-1)).toMatchObject({
+        type: "done",
+        status: "complete",
+      });
+      const assistant = (
+        await harness.conversations.get(conversation.conversationId)
+      )!.messages.find((message) => message.role === "assistant")!;
+      expect(assistant.citations).toHaveLength(1);
+      expect(assistant.citations[0]).toMatchObject({
+        sourceId: sourceIdB,
+        generationId: "g_b",
+        commitSha: COMMIT_B,
+      });
+      expect(harness.snapshotService.reads).toBe(1);
     } finally {
       harness.db.close();
     }

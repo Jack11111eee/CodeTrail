@@ -167,4 +167,86 @@ describe("selection ownership", () => {
       harness.db.close();
     }
   });
+
+  it("rejects an empty selection and a foreign selection at creation", async () => {
+    const ctx = createQaDb();
+    try {
+      const { generation } = fixture(ctx);
+      const conversations = createConversationService({
+        db: ctx.db,
+        repos: ctx.repos,
+        clock: ctx.clock,
+      });
+      const conversation = await conversations.create({
+        generationIds: [generation.generationId],
+      });
+
+      await expect(
+        conversations.appendUserMessage(
+          conversation.conversationId,
+          "问题",
+          {} as never,
+        ),
+      ).rejects.toMatchObject({ code: "invalid_input" });
+      await expect(
+        conversations.create({
+          generationIds: [generation.generationId],
+          lessonId: "l_foreign" as never,
+        }),
+      ).rejects.toMatchObject({ code: "version_mismatch" });
+      await expect(
+        conversations.create({
+          generationIds: [generation.generationId],
+          moduleId: "m_foreign",
+        }),
+      ).rejects.toMatchObject({ code: "version_mismatch" });
+    } finally {
+      ctx.close();
+    }
+  });
+
+  it("accepts a selection owned by the second generation of a two-generation binding", async () => {
+    const ctx = createQaDb();
+    try {
+      const first = publishGeneration(ctx, {
+        generationId: "g_a",
+        lessons: [{ lessonId: "l_a", moduleIds: ["m_a"] }],
+      });
+      const second = publishGeneration(ctx, {
+        generationId: "g_b",
+        repoId: "r_second",
+        projectId: "p_second",
+        commitSha: "b".repeat(40),
+        lessons: [{ lessonId: "l_b", moduleIds: ["m_b"] }],
+      });
+      const conversations = createConversationService({
+        db: ctx.db,
+        repos: ctx.repos,
+        clock: ctx.clock,
+      });
+      const conversation = await conversations.create({
+        generationIds: [first.generationId, second.generationId],
+      });
+
+      await expect(
+        conversations.appendUserMessage(
+          conversation.conversationId,
+          "问题",
+          { lessonId: "l_b" as never },
+        ),
+      ).resolves.toBeDefined();
+      await expect(
+        conversations.appendUserMessage(conversation.conversationId, "问题", {
+          moduleId: "m_b",
+        }),
+      ).resolves.toBeDefined();
+      await expect(
+        conversations.appendUserMessage(conversation.conversationId, "问题", {
+          lessonId: "l_foreign" as never,
+        }),
+      ).rejects.toMatchObject({ code: "version_mismatch" });
+    } finally {
+      ctx.close();
+    }
+  });
 });

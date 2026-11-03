@@ -196,4 +196,52 @@ describe("answer check status", () => {
       }
     }
   });
+
+  it("persists generating → checking → complete across the turn", async () => {
+    const { harness, fixture, sourceId } = setup((id) => ({
+      answer: "账本记录发票。",
+      conclusion: "code_fact",
+      citations: [{ sourceId: id }],
+    }));
+    const phases: string[] = [];
+    const original = harness.conversations.setAnswerPhase.bind(
+      harness.conversations,
+    );
+    (
+      harness.conversations as unknown as Record<string, unknown>
+    ).setAnswerPhase = (id: never, messageId: never, phase: string) => {
+      phases.push(phase);
+      return original(id, messageId, phase as never);
+    };
+
+    try {
+      const conversation = await harness.conversations.create({
+        generationIds: [fixture.generationId],
+      });
+      let phaseAtStart: string | undefined;
+      for await (const event of harness.answers.answer({
+        conversationId: conversation.conversationId,
+        text: "问题",
+        selection: null,
+        signal: new AbortController().signal,
+      })) {
+        if (event.type === "start") {
+          phaseAtStart = harness.db.repos.conversations
+            .messages(conversation.conversationId)
+            .find((message) => message.messageId === event.messageId)
+            ?.answerPhase;
+        }
+      }
+
+      const assistant = (
+        await harness.conversations.get(conversation.conversationId)
+      )!.messages.find((message) => message.role === "assistant")!;
+      expect(phaseAtStart).toBe("generating");
+      expect(phases).toEqual(["checking"]);
+      expect(assistant.answerPhase).toBe("complete");
+      expect(sourceId).toBeTruthy();
+    } finally {
+      harness.db.close();
+    }
+  });
 });

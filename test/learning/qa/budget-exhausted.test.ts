@@ -92,4 +92,64 @@ describe("tool budget exhaustion", () => {
       harness.db.close();
     }
   });
+
+  it("stops at the model-call cap when the model keeps requesting tools", async () => {
+    const modelCallCap = QA_LIMITS.maxToolCalls + 2;
+    const files = { "src/f.ts": "export const value = 1;\n" };
+    const entries: ReturnType<typeof toolEntry>[] = [];
+    for (let occurrence = 1; occurrence <= modelCallCap + 3; occurrence += 1) {
+      entries.push(
+        toolEntry(
+          [{ name: "read_snapshot_file", args: { path: "src/f.ts" } }],
+          occurrence,
+        ),
+      );
+    }
+    const calls: number[] = [];
+    const harness = createHarness({
+      modelDir: scriptDir(entries),
+      onCall: () => calls.push(calls.length + 1),
+      hits: { g_cap: [] },
+      filesByGeneration: { g_cap: files },
+      generationOfCommit: { [COMMIT_A]: "g_cap" },
+    });
+    const fixture = publishGeneration(harness.db, {
+      generationId: "g_cap",
+      files,
+    });
+    const conversation = await harness.conversations.create({
+      generationIds: [fixture.generationId],
+    });
+
+    const events = await collect(
+      harness.answers.answer({
+        conversationId: conversation.conversationId,
+        text: "一直读文件",
+        selection: null,
+        signal: new AbortController().signal,
+      }),
+    );
+
+    try {
+      const assistant = (
+        await harness.conversations.get(conversation.conversationId)
+      )!.messages.find((message) => message.role === "assistant")!;
+
+      // The loop must not keep asking the model past the cap, even though the
+      // scripted model would happily answer every occurrence.
+      expect(calls.length).toBe(modelCallCap);
+      expect(harness.snapshotService.reads).toBeLessThanOrEqual(
+        QA_LIMITS.maxToolCalls,
+      );
+      expect(assistant.incomplete).toBe(true);
+      expect(assistant.content).toContain("model-call cap reached");
+      expect(assistant.content).toContain("未覆盖");
+      expect(events.at(-1)).toMatchObject({
+        type: "done",
+        incomplete: true,
+      });
+    } finally {
+      harness.db.close();
+    }
+  });
 });
