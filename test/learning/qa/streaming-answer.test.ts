@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 
+import { repoSourceId } from "../../../src/learning/evidence/registry.ts";
 import { hitSourceId } from "../../../src/learning/qa/multi-context.ts";
 import { QA_TOOL_NAMES } from "../../../src/learning/qa/tools.ts";
 import {
@@ -11,6 +12,7 @@ import {
   publishGeneration,
   sourceHit,
   scriptDir,
+  toolEntry,
   COMMIT_A,
   REPO_ID,
 } from "./qa-helpers.ts";
@@ -169,6 +171,63 @@ describe("streaming answer", () => {
       expect(seen.length).toBeGreaterThan(0);
       expect(seen[0]).toEqual({ status: "streaming", answerPhase: "generating" });
       expect(seen.every((entry) => entry.answerPhase !== "complete")).toBe(true);
+    } finally {
+      harness.db.close();
+    }
+  });
+
+  it("accepts a citation for a file the answer read through a tool", async () => {
+    const files = { "src/unregistered.ts": "export const value = 42;\n" };
+    const sourceId = repoSourceId("src/unregistered.ts", COMMIT_A, null);
+    const dir = scriptDir([
+      toolEntry([
+        { name: "read_snapshot_file", args: { path: "src/unregistered.ts" } },
+      ]),
+      answerEntry(
+        {
+          answer: "该文件导出了 value。",
+          conclusion: "code_fact",
+          citations: [{ sourceId }],
+        },
+        2,
+      ),
+    ]);
+    const harness = createHarness({
+      modelDir: dir,
+      filesByGeneration: { g_tool_source: files },
+      generationOfCommit: { [COMMIT_A]: "g_tool_source" },
+    });
+    const fixture = publishGeneration(harness.db, {
+      generationId: "g_tool_source",
+      files,
+    });
+    try {
+      const conversation = await harness.conversations.create({
+        generationIds: [fixture.generationId],
+      });
+      const events = await collect(
+        harness.answers.answer({
+          conversationId: conversation.conversationId,
+          text: "value 是什么？",
+          selection: null,
+          signal: new AbortController().signal,
+        }),
+      );
+
+      expect(events.at(-1)).toMatchObject({
+        type: "done",
+        status: "complete",
+      });
+      const assistant = (
+        await harness.conversations.get(conversation.conversationId)
+      )!.messages.find((message) => message.role === "assistant")!;
+      expect(assistant.status).toBe("complete");
+      expect(assistant.citations).toHaveLength(1);
+      expect(assistant.citations[0]).toMatchObject({
+        sourceId,
+        generationId: fixture.generationId,
+        commitSha: COMMIT_A,
+      });
     } finally {
       harness.db.close();
     }

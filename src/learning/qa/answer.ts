@@ -581,20 +581,33 @@ export function createAnswerService(deps: AnswerDeps): AnswerService {
             );
             continue;
           }
+          const pickedTurn =
+            turn.find(
+              (entry) => entry.generationId === picked.generationId,
+            ) ?? turn[0];
           try {
             const result = await picked.def.run(
               call.args,
-              toolContext(
-                turn.find(
-                  (entry) => entry.generationId === picked.generationId,
-                ) ?? turn[0],
-                budget,
-              ),
+              toolContext(pickedTurn, budget),
             );
             budget.consume({
               inputTokens: estimateTokens(result.content),
               outputTokens: 0,
             });
+            // A tool's own citations are legitimate evidence: the answer may
+            // cite a file/page it actually read, attributed to the generation
+            // the tool ran against (AC-QA-09).
+            for (const sourceId of result.citations) {
+              if (!available.has(sourceId)) {
+                const label = describeArgs(call.args);
+                available.set(sourceId, {
+                  generationId: picked.generationId,
+                  commitSha: pickedTurn.binding.commitSha,
+                  label: label === "" ? sourceId : label,
+                  kind: "repo",
+                });
+              }
+            }
             toolMessages.push(
               new ToolMessage({
                 content: result.content,
