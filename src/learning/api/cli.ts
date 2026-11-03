@@ -29,6 +29,7 @@ import type {
   SnapshotService,
 } from "../contracts/index.js";
 import type { RetrievalContext } from "../retrieval/search.js";
+import type { JsonLogger } from "./log.js";
 
 // ── hardening (AC-SEC-08) ───────────────────────────────────────────────────
 
@@ -421,7 +422,48 @@ async function assertEveryRouteResolves(): Promise<void> {
 interface BootState {
   deps: AppDeps | null;
   server: { close: () => Promise<void> } | null;
+  logger: JsonLogger | null;
   draining: boolean;
+}
+
+/**
+ * Installs the structured logger from the data directory it belongs to. Every
+ * secret the process can hold — the GitHub token (file or env) and the session
+ * token — is handed to the redactor so no error message or job id field can
+ * echo one into `logs/` (AC-OPS-08, AC-SEC-09).
+ */
+async function createBootLogger(
+  deps: AppDeps,
+  env: NodeJS.ProcessEnv,
+): Promise<JsonLogger> {
+  const [{ createJsonLogger }, { loadCredential, redactSecrets }, { join }] =
+    await Promise.all([
+      import("./log.js"),
+      import("../config/credentials.js"),
+      import("node:path"),
+    ]);
+
+  const secrets: string[] = [];
+  const envToken = env.CODETRAIL_GITHUB_TOKEN;
+  if (typeof envToken === "string" && envToken !== "") secrets.push(envToken);
+  try {
+    const credential = loadCredential(deps.paths, env);
+    if (credential !== null) secrets.push(credential.token);
+  } catch {
+    // A corrupt credentials.json surfaces where it is consumed; it must not
+    // prevent the server from booting or from logging.
+  }
+  try {
+    secrets.push(await deps.session.ensureToken());
+  } catch {
+    // Minting happens on the first bootstrap request when the file is locked.
+  }
+
+  return createJsonLogger({
+    file: join(deps.paths.logs, "codetrail.jsonl"),
+    clock: deps.clock,
+    redact: (text: string) => redactSecrets(text, secrets),
+  });
 }
 
 /**
@@ -432,6 +474,8 @@ interface BootState {
 async function drain(state: BootState): Promise<void> {
   if (state.draining) return;
   state.draining = true;
+
+  state.logger?.event({ event: "shutdown", level: "info" });
 
   try {
     if (state.server !== null) await state.server.close();
@@ -480,7 +524,12 @@ export async function main(argv: readonly string[]): Promise<void> {
       ? process.env
       : { ...process.env, CODETRAIL_PORT: String(options.port) };
 
-  const state: BootState = { deps: null, server: null, draining: false };
+  const state: BootState = {
+    deps: null,
+    server: null,
+    logger: null,
+    draining: false,
+  };
   installSignalHandlers(state);
 
   try {
@@ -492,6 +541,7 @@ export async function main(argv: readonly string[]): Promise<void> {
 
     const deps = await createAppDeps(env);
     state.deps = deps;
+    state.logger = await createBootLogger(deps, env);
 
     // Restart recovery completes before the listener exists, so no request can
     // observe a half-recovered database (AC-OPS-02).
@@ -523,7 +573,23 @@ export async function main(argv: readonly string[]): Promise<void> {
 
     // Exactly one line on stdout: the loopback URL (AC-OPS-02).
     process.stdout.write(`${server.url}\n`);
+    state.logger?.event({
+      event: "server_started",
+      level: "info",
+      port: server.port,
+      url: server.url,
+    });
   } catch (error) {
+    const errorCode =
+      error instanceof (await import("../contracts/index.js")).LearningError
+        ? error.code
+        : "internal_error";
+    state.logger?.event({
+      event: "server_error",
+      level: "error",
+      error_code: errorCode,
+      message: error instanceof Error ? error.message : String(error),
+    });
     state.deps?.watch.stop();
     state.deps?.db.close();
     throw error;
