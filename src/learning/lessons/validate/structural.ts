@@ -131,10 +131,16 @@ function validateBoundaries(
     const refs = boundary.evidenceIds
       .map((id) => safeGetRef(ctx, id))
       .filter((ref) => ref !== null);
-    const hasRepo = refs.some((ref) => ref.kind === "repo");
+    // A design/decision document may live inside the analysed repository, so
+    // "is a repo source" alone does not prove an implementation exists. Only a
+    // non-design repo source can back `implemented`; a repo-hosted design note
+    // is still planned-only evidence.
+    const hasCodeRepo = refs.some(
+      (ref) => ref.kind === "repo" && !isDesignDoc(ref),
+    );
     const hasDesignDoc = refs.some((ref) => isDesignDoc(ref));
 
-    if (boundary.status === "implemented" && !hasRepo) {
+    if (boundary.status === "implemented" && !hasCodeRepo) {
       issues.push(
         issue(
           "boundaries",
