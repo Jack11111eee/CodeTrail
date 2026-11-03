@@ -200,7 +200,12 @@ const limitString = z
   .string()
   .regex(/^\d+$/u, "must be a non-negative integer");
 
-const deleteProjectQuery = z.object({ confirm: z.literal("true") }).strict();
+// `confirm` is interpreted by the handler, not by the schema: a missing or
+// non-`true` value must be `invalid_input` with `details.reason="confirm_required"`
+// (§5.8), not a generic Zod issue list.
+const deleteProjectQuery = z
+  .object({ confirm: z.string().optional() })
+  .strict();
 const messageListQuery = z
   .object({ limit: limitString.optional(), before: nonEmptyString.optional() })
   .strict();

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { spawn } from "node:child_process";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 
@@ -37,6 +38,12 @@ export interface FakeGithubOptions {
   token?: string;
   /** Files generated for `/compare`; the response is capped at 300. */
   compareFiles?: number;
+  /**
+   * A bare repository served over Git smart HTTP at
+   * `/<owner>/<repo>.git`. This lets `POST /api/projects {githubUrl}` exercise
+   * a real clone against the fake server instead of the network.
+   */
+  gitRepoPath?: string;
 }
 
 export interface RecordedRequest {
@@ -211,6 +218,100 @@ function sortPullRequests(
   return direction === "asc" ? sorted : sorted.reverse();
 }
 
+function gitServiceHeader(text: string): string {
+  return `${(Buffer.byteLength(text) + 4).toString(16).padStart(4, "0")}${text}`;
+}
+
+/** Accepts a Bearer token (REST) or Basic auth whose user/password is the token (Git). */
+function hasToken(header: string | undefined, token: string): boolean {
+  if (header === `Bearer ${token}`) return true;
+  if (typeof header !== "string" || !header.startsWith("Basic ")) return false;
+  try {
+    const decoded = Buffer.from(header.slice(6), "base64").toString("utf8");
+    const separator = decoded.indexOf(":");
+    const user = separator === -1 ? decoded : decoded.slice(0, separator);
+    const password = separator === -1 ? "" : decoded.slice(separator + 1);
+    return user === token || password === token;
+  } catch {
+    return false;
+  }
+}
+
+function gitProtocolEnv(
+  request: http.IncomingMessage,
+): NodeJS.ProcessEnv {
+  const protocol = request.headers["git-protocol"];
+  return {
+    ...process.env,
+    GIT_PROTOCOL: typeof protocol === "string" ? protocol : "",
+  };
+}
+
+/**
+ * Git smart HTTP v0/v2: `info/refs` advertises refs through `upload-pack`, and
+ * a POST streams the packfile request/response. The fake server never writes a
+ * repository and never accepts a method other than GET/POST here.
+ */
+function serveGit(
+  request: http.IncomingMessage,
+  response: http.ServerResponse,
+  repoPath: string,
+  pathname: string,
+): void {
+  const env = gitProtocolEnv(request);
+  if (pathname.endsWith("/info/refs")) {
+    const advertise = spawn(
+      "git",
+      ["upload-pack", "--stateless-rpc", "--advertise-refs", repoPath],
+      { env },
+    );
+    const chunks: Buffer[] = [];
+    advertise.stdout.on("data", (chunk: Buffer) => chunks.push(chunk));
+    advertise.stderr.resume();
+    advertise.on("error", () => {
+      if (!response.writableEnded) {
+        response.statusCode = 500;
+        response.end("git upload-pack failed");
+      }
+    });
+    advertise.on("close", () => {
+      if (response.writableEnded) return;
+      const head = Buffer.from(
+        `${gitServiceHeader("# service=git-upload-pack\n")}0000`,
+        "utf8",
+      );
+      const body = Buffer.concat([head, ...chunks]);
+      response.writeHead(200, {
+        "Content-Type": "application/x-git-upload-pack-advertisement",
+        "Cache-Control": "no-cache",
+        "Content-Length": body.byteLength,
+      });
+      response.end(body);
+    });
+    return;
+  }
+
+  if (pathname.endsWith("/git-upload-pack")) {
+    const upload = spawn("git", ["upload-pack", "--stateless-rpc", repoPath], {
+      env,
+    });
+    upload.stderr.resume();
+    response.writeHead(200, {
+      "Content-Type": "application/x-git-upload-pack-result",
+      "Cache-Control": "no-cache",
+    });
+    request.pipe(upload.stdin);
+    upload.stdout.pipe(response);
+    upload.on("error", () => {
+      if (!response.writableEnded) response.end();
+    });
+    return;
+  }
+
+  response.writeHead(404, { "Content-Type": "text/plain" });
+  response.end("not found");
+}
+
 /** Starts the fake server on an ephemeral loopback port. */
 export async function startFakeGithub(
   options: FakeGithubOptions,
@@ -255,6 +356,29 @@ export async function startFakeGithub(
     requests.push({ method, path: `${pathname}${url.search}` });
 
     const baseHeaders = rateLimitHeaders(options);
+
+    // Git smart HTTP lives on the same origin as the REST fake so
+    // `POST /api/projects {githubUrl}` can clone without touching the network.
+    const gitPrefix = `/${owner}/${repo}.git`;
+    if (
+      options.gitRepoPath !== undefined &&
+      (pathname === `${gitPrefix}/info/refs` ||
+        pathname === `${gitPrefix}/git-upload-pack`)
+    ) {
+      if (
+        options.token !== undefined &&
+        !hasToken(request.headers.authorization, options.token)
+      ) {
+        response.writeHead(401, {
+          "WWW-Authenticate": 'Basic realm="fake-github"',
+          "Content-Type": "text/plain",
+        });
+        response.end("unauthorized");
+        return;
+      }
+      serveGit(request, response, options.gitRepoPath, pathname);
+      return;
+    }
 
     if (options.token !== undefined) {
       const authorization = request.headers.authorization;

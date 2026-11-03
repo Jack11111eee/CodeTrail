@@ -1,9 +1,13 @@
 import fs from "node:fs";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   assertProjectActive,
+  newConversationId,
+  newMessageId,
+  type CreateAnalysisResponse,
+  type CreateProjectResponse,
   type ProjectId,
 } from "../../../src/learning/contracts/index.ts";
 import {
@@ -14,6 +18,14 @@ import {
   createRemovalService,
   type RemovalService,
 } from "../../../src/learning/projects/removal.ts";
+import { fixturePath } from "../helpers/git-fixture.ts";
+import { citationAvailability } from "../../../src/learning/api/routes/generations.ts";
+import {
+  errorCode,
+  httpRequest,
+  jsonBody,
+  type StubResponse,
+} from "../helpers/stub-server.ts";
 import {
   makeChange,
   makeGeneration,
@@ -27,6 +39,7 @@ import {
   thrownBy,
   type ProjectsHarness,
 } from "./harness.ts";
+import { startRoutesHarness, type RoutesHarness } from "./routes-harness.ts";
 
 /**
  * AC-PRJ-14 (service half): dependents enumerate every artifact, an
@@ -233,5 +246,237 @@ describe("project removal and dependents", () => {
     expect(after?.deletedAt).toBeNull();
     expect(after?.watchEnabled).toBe(true);
     expect(service.state(project.projectId)).toBe("active");
+  });
+});
+
+/**
+ * AC-PRJ-14 (HTTP half, §5.8 matrix): the same removal over the wire. Every
+ * generation-scoped link answers 410 with `reason="project_removed"` and no
+ * redirect, while the rows and the conversation history are retained.
+ */
+describe("removal over HTTP", () => {
+  let server: RoutesHarness | undefined;
+
+  beforeEach(async () => {
+    server = await startRoutesHarness();
+  });
+
+  afterEach(async () => {
+    await server?.close();
+    server = undefined;
+  });
+
+  function get(path: string): Promise<StubResponse> {
+    return httpRequest(server!.port, { path, headers: { ...server!.cookie } });
+  }
+
+  function post(path: string, body: unknown): Promise<StubResponse> {
+    return httpRequest(server!.port, {
+      method: "POST",
+      path,
+      headers: { ...server!.cookie, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
+
+  function del(path: string): Promise<StubResponse> {
+    return httpRequest(server!.port, {
+      method: "DELETE",
+      path,
+      headers: { ...server!.cookie },
+    });
+  }
+
+  function reasonOf(response: StubResponse): unknown {
+    const body = jsonBody(response) as {
+      error?: { details?: { reason?: unknown } };
+    };
+    return body.error?.details?.reason;
+  }
+
+  it("covers every removed-project route row", async () => {
+    const created = jsonBody(
+      await post("/api/projects", {
+        localPath: fixturePath("last-mile-mini"),
+      }),
+    ) as CreateProjectResponse;
+    const analysis = jsonBody(
+      await post(`/api/projects/${created.projectId}/analyses`, { ref: "HEAD" }),
+    ) as CreateAnalysisResponse;
+    await server!.jobRunner.drain();
+
+    const generation = server!.repos.generations.byId(
+      analysis.generationId,
+    );
+    const lesson = server!.repos.lessons.listByGeneration(
+      analysis.generationId,
+    )[0];
+    const source = server!.repos.sources.all(analysis.generationId)[0];
+    expect(generation?.status).toBe("published");
+    expect(lesson).toBeDefined();
+    expect(source).toBeDefined();
+
+    const conversationId = newConversationId();
+    const at = server!.clock.now().toISOString();
+    server!.repos.conversations.insert({
+      conversationId,
+      generationIds: [analysis.generationId],
+      at,
+    });
+    server!.repos.conversations.insertMessage({
+      messageId: newMessageId(),
+      conversationId,
+      role: "user",
+      content: "旧快照为什么丢了",
+      status: "complete",
+      answerPhase: "complete",
+      citations: [],
+      selection: null,
+      checks: null,
+      unknownReason: null,
+      incomplete: false,
+      createdAt: at,
+    });
+    server!.repos.changes.insertMany([
+      {
+        eventId: "e_http_seed" as never,
+        eventKey: "ek_http_seed",
+        repoId: created.repoId,
+        projectId: created.projectId,
+        streamId: "default_branch",
+        streamKind: "default_branch",
+        kind: "commit",
+        baseSha: null,
+        headSha: generation!.commitSha,
+        mergeBaseSha: null,
+        baseContextSha: null,
+        significance: "full",
+        state: "published",
+        jobId: null,
+        gapReason: null,
+        linkedEventId: null,
+        linkRelation: null,
+        discoveredAt: at,
+        publishedAt: at,
+        payload: { commit: { firstParent: null, associatedCommits: [] } },
+      },
+    ]);
+
+    const dependents = await get(
+      `/api/projects/${created.projectId}/dependents`,
+    );
+    expect(dependents.status).toBe(200);
+    const view = jsonBody(dependents) as {
+      conversations: { ids: string[]; count: number };
+      lessons: { ids: string[]; count: number };
+      generations: { ids: string[]; count: number };
+      changeEvents: { ids: string[]; count: number };
+    };
+    expect(view.conversations.ids).toContain(conversationId);
+    expect(view.conversations.count).toBe(1);
+    expect(view.lessons.ids).toContain(lesson.lessonId);
+    expect(view.generations.ids).toContain(analysis.generationId);
+    expect(view.changeEvents.ids).toContain("e_http_seed");
+    for (const group of [
+      view.conversations,
+      view.lessons,
+      view.generations,
+      view.changeEvents,
+    ]) {
+      expect(group.count).toBe(group.ids.length);
+    }
+
+    const refused = await del(`/api/projects/${created.projectId}`);
+    expect(refused.status).toBe(400);
+    expect(errorCode(refused)).toBe("invalid_input");
+    expect(reasonOf(refused)).toBe("confirm_required");
+    expect((await get(`/api/projects/${created.projectId}`)).status).toBe(200);
+
+    // A citation is available while the project is live, and marked
+    // unavailable after removal — the read-time derivation the conversation
+    // routes use (§5.8, AC-R16-02).
+    expect(citationAvailability(server!.deps, analysis.generationId)).toBe(
+      "available",
+    );
+
+    const removed = await del(
+      `/api/projects/${created.projectId}?confirm=true`,
+    );
+    expect(removed.status).toBe(200);
+    expect(jsonBody(removed)).toMatchObject({ removed: true });
+
+    expect(citationAvailability(server!.deps, analysis.generationId)).toBe(
+      "source_removed",
+    );
+
+    for (const path of [
+      `/api/projects/${created.projectId}`,
+      `/api/projects/${created.projectId}/dependents`,
+    ]) {
+      const response = await get(path);
+      expect(response.status).toBe(410);
+      expect(errorCode(response)).toBe("source_removed");
+      expect(reasonOf(response)).toBe("project_removed");
+      expect(response.headers.location).toBeUndefined();
+    }
+
+    for (const submission of [
+      await post(`/api/projects/${created.projectId}/analyses`, { ref: "HEAD" }),
+      await post(`/api/projects/${created.projectId}/comparisons`, {
+        baseSha: "HEAD~1",
+        headSha: "HEAD",
+      }),
+      await del(`/api/projects/${created.projectId}?confirm=true`),
+    ]) {
+      expect(submission.status).toBe(410);
+      expect(reasonOf(submission)).toBe("project_removed");
+      expect(submission.headers.location).toBeUndefined();
+    }
+
+    const list = jsonBody(await get("/api/projects")) as {
+      projects: { projectId: string }[];
+    };
+    expect(
+      list.projects.some((project) => project.projectId === created.projectId),
+    ).toBe(false);
+
+    for (const path of [
+      `/api/generations/${analysis.generationId}/lessons`,
+      `/api/generations/${analysis.generationId}/lessons/${lesson.lessonId}`,
+      `/api/generations/${analysis.generationId}/sources/${source.sourceId}`,
+      `/api/generations/${analysis.generationId}/coverage`,
+    ]) {
+      const response = await get(path);
+      expect(response.status).toBe(410);
+      expect(errorCode(response)).toBe("source_removed");
+      expect(reasonOf(response)).toBe("project_removed");
+      expect(response.headers.location).toBeUndefined();
+    }
+
+    // History is retained: rows survive and the conversation stays readable at
+    // the store layer. Its HTTP read/post handlers belong to the conversations
+    // route module; this issue owns the removal decision they consume.
+    expect(
+      server!.repos.generations.byId(analysis.generationId as never),
+    ).not.toBeNull();
+    expect(
+      server!.repos.lessons.byId(
+        analysis.generationId as never,
+        lesson.lessonId,
+      ),
+    ).not.toBeNull();
+    expect(
+      server!.repos.sources.get(
+        analysis.generationId as never,
+        source.sourceId,
+      ),
+    ).not.toBeNull();
+    expect(server!.repos.conversations.byId(conversationId)).not.toBeNull();
+    expect(
+      server!.repos.conversations.messages(conversationId).length,
+    ).toBe(1);
+
+    // Job routes are not project-scoped in §5.8.
+    expect((await get(`/api/jobs/${analysis.jobId}`)).status).toBe(200);
   });
 });
