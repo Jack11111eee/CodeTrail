@@ -6,7 +6,7 @@ import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 /**
- * Upstream import boundary (architecture §2.1, AC-ARCH-01).
+ * Upstream import boundary (architecture §2.1).
  *
  * Nothing outside `src/learning/upstream/**` may import the pinned upstream
  * modules. The adapter is the single coupling point; a stray import elsewhere

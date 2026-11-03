@@ -6,7 +6,7 @@ import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 /**
- * DOM boundary (architecture §18.2, AC-ARCH-02).
+ * DOM boundary (architecture §18.2).
  *
  * Only `src/learning/ui/client.ts` and `src/learning/ui/client/**` may touch
  * `document`, `window` or `localStorage`. Everything else is type-checked
