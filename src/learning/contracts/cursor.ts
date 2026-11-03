@@ -106,11 +106,12 @@ export function encodeCursor(c: CursorJson): string {
   return JSON.stringify(c);
 }
 
-/** `new Date(max(c.updatedAt ?? now - maxLookbackMs) - PR_OVERLAP_MS)`. */
+/** `new Date(max(c.updatedAt ?? now - maxLookbackMs) - overlapMs)`. */
 export function windowStart(
   c: CursorJson,
   now: Date,
   maxLookbackMs: number,
+  overlapMs: number = PR_OVERLAP_MS,
 ): Date {
   const anchor =
     c.updatedAt === null
@@ -119,5 +120,5 @@ export function windowStart(
   const safeAnchor = Number.isNaN(anchor)
     ? now.getTime() - maxLookbackMs
     : anchor;
-  return new Date(safeAnchor - PR_OVERLAP_MS);
+  return new Date(safeAnchor - overlapMs);
 }

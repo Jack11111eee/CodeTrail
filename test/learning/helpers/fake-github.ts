@@ -28,6 +28,8 @@ export interface FakeGithubOptions {
   states?: Array<"open" | "closed" | "merged">;
   /** Value for `X-RateLimit-Remaining` and the reset instant. */
   rateLimit?: { remaining: number; resetAt: string };
+  /** Omits every `X-RateLimit-*` response header (unknown quota). */
+  omitRateLimitHeaders?: boolean;
   /** Seconds sent in `Retry-After` on an injected 429. */
   retryAfter?: number;
   /** The first N requests fail (429 when `retryAfter` is set, otherwise 500). */
@@ -151,6 +153,7 @@ function json(
 function rateLimitHeaders(
   options: FakeGithubOptions,
 ): Record<string, string | number> {
+  if (options.omitRateLimitHeaders === true) return {};
   const remaining = options.rateLimit?.remaining ?? 4999;
   const resetAt = options.rateLimit?.resetAt ?? iso(0);
   return {
