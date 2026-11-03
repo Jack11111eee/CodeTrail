@@ -16,12 +16,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { toChangeSummary } from "./routes/changes.js";
 import { toUsageView, computeStorageReport } from "./routes/ops.js";
 import { toModelSettingsView } from "./routes/settings.js";
 import type {
   AppDeps,
-  ChangeRecord,
-  ChangeSummary,
   ConversationView,
   CoverageReport,
   GenerationId,
@@ -446,36 +445,6 @@ function buildReaderModel(
 }
 
 // ── inbox ───────────────────────────────────────────────────────────────────
-
-function changeTitle(change: ChangeRecord): string {
-  const pr = change.payload.pr;
-  if (pr !== undefined) return pr.title;
-  if (change.kind === "history_gap") return "历史缺口";
-  if (change.kind === "branch_switch") return "分支切换";
-  if (change.kind === "baseline") return "基线";
-  if (change.headSha !== null) return `提交 ${change.headSha.slice(0, 12)}`;
-  return "变更记录";
-}
-
-function toChangeSummary(change: ChangeRecord): ChangeSummary {
-  return {
-    changeId: change.eventId,
-    kind: change.kind,
-    streamKind: change.streamKind,
-    state: change.state,
-    significance: change.significance,
-    headSha: change.headSha,
-    baseSha: change.baseSha,
-    hasGap:
-      change.state === "gap" ||
-      change.kind === "history_gap" ||
-      change.gapReason !== null,
-    linkedChangeId: change.linkedEventId,
-    discoveredAt: change.discoveredAt,
-    publishedAt: change.publishedAt,
-    title: changeTitle(change),
-  };
-}
 
 function resolveProject(
   deps: AppDeps,

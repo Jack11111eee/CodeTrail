@@ -43,8 +43,17 @@ export interface RoutesServer {
   close(): Promise<void>;
 }
 
+export interface RoutesServerOptions {
+  /**
+   * Extra `AppDeps` seams the module under test needs (`watch`, `removal`, …).
+   * The store, clock, session and path roots are always the real ones.
+   */
+  deps?: Record<string, unknown>;
+}
+
 export async function startRoutesServer(
   modules: RouteModule[],
+  options: RoutesServerOptions = {},
 ): Promise<RoutesServer> {
   const paths = resolveDataPaths(process.env);
   await ensureDataDir(paths);
@@ -61,6 +70,7 @@ export async function startRoutesServer(
     repos,
     session,
     model: null,
+    ...options.deps,
   } as unknown as AppDeps;
 
   for (const module of modules) registerRouteModule(module);
