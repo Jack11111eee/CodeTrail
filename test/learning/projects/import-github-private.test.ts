@@ -97,6 +97,22 @@ describe("private GitHub import", () => {
     expect(server!.repos.projects.list()).toEqual([]);
   });
 
+  it("rejects a wrong token without echoing it", async () => {
+    const wrong = "ghp_wrong_token_canary_0987654321";
+    process.env.CODETRAIL_GITHUB_TOKEN = wrong;
+    const response = await httpRequest(server!.port, {
+      method: "POST",
+      path: "/api/projects",
+      headers: { ...server!.cookie, "Content-Type": "application/json" },
+      body: importBody(),
+    });
+    // A rejected credential is still an auth failure, not a retryable outage.
+    expect(response.status).toBe(401);
+    expect(errorCode(response)).toBe("github_auth_failed");
+    expect(response.text).not.toContain(wrong);
+    expect(server!.repos.projects.list()).toEqual([]);
+  });
+
   it("succeeds with a token and never leaks the canary", async () => {
     process.env.CODETRAIL_GITHUB_TOKEN = CANARY;
 

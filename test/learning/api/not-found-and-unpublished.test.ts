@@ -109,6 +109,9 @@ describe("not found and unpublished", () => {
       "/api/projects/p_missing",
       "/api/jobs/j_missing",
       "/api/generations/g_missing/lessons",
+      "/api/generations/g_missing/lessons/l_missing",
+      "/api/generations/g_missing/sources/s_missing",
+      "/api/generations/g_missing/coverage",
       "/api/nothing-here",
     ]) {
       const response = await get(path);
@@ -118,19 +121,35 @@ describe("not found and unpublished", () => {
     }
   });
 
-  it("returns 409 unpublished_generation for staged and failed rows", async () => {
-    for (const [path, status] of [
-      ["/api/generations/g_staged/lessons", "staged"],
-      ["/api/generations/g_failed/coverage", "failed"],
+  it("returns 409 unpublished_generation for staged and failed rows on every read", async () => {
+    for (const [generationId, status] of [
+      ["g_staged", "staged"],
+      ["g_failed", "failed"],
     ] as const) {
-      const response = await get(path);
-      expect(response.status).toBe(409);
-      expect(errorCode(response)).toBe("unpublished_generation");
-      const body = jsonBody(response) as {
-        error?: { details?: { status?: string } };
-      };
-      expect(body.error?.details?.status).toBe(status);
+      for (const path of [
+        `/api/generations/${generationId}/lessons`,
+        `/api/generations/${generationId}/lessons/l_pub`,
+        `/api/generations/${generationId}/sources/s_any`,
+        `/api/generations/${generationId}/coverage`,
+      ]) {
+        const response = await get(path);
+        expect(response.status).toBe(409);
+        expect(errorCode(response)).toBe("unpublished_generation");
+        const body = jsonBody(response) as {
+          error?: { details?: { status?: string } };
+        };
+        expect(body.error?.details?.status).toBe(status);
+      }
     }
+  });
+
+  it("reports unpublished before an unknown or foreign lesson id", async () => {
+    // Resolution order (§5.8): row absent → 404; not published → 409; removed
+    // → 410. A staged generation therefore never leaks a version_mismatch or a
+    // 404 for its children.
+    const response = await get("/api/generations/g_staged/lessons/l_pub");
+    expect(response.status).toBe(409);
+    expect(errorCode(response)).toBe("unpublished_generation");
   });
 
   it("fails a new analysis with 400 model_not_configured", async () => {

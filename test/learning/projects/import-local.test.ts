@@ -60,6 +60,8 @@ describe("local import", () => {
     expect(before.status).toBe(200);
     const beforeDetail = jsonBody(before) as ProjectDetail;
     expect(beforeDetail.analyzedCommitSha).toBeNull();
+    expect(beforeDetail.lastSuccessAt).toBeNull();
+    expect(beforeDetail.latestJobState).toBeNull();
     expect(beforeDetail.defaultBranch).toBe("main");
     expect(beforeDetail.watchEnabled).toBe(false);
     expect(beforeDetail.generationCount).toBe(0);

@@ -116,6 +116,20 @@ const githubProject = z
 
 const createProjectBody = z.union([localPathProject, githubProject]);
 
+/**
+ * AC-PRJ-02 / §5.1: naming both sources has its own documented reason. The
+ * strict union would reject such a body with a generic issue list, so the
+ * mutual-exclusion guard runs first; every other shape still goes through the
+ * union (and the handler) to keep `not_git_repo`, `invalid_path` and
+ * `out_of_scope_path` distinct.
+ */
+function precheckProjectSource(body: unknown): void {
+  if (body === null || typeof body !== "object") return;
+  if ("localPath" in body && "githubUrl" in body) {
+    throw invalidInput({ reason: "local_path_and_url" });
+  }
+}
+
 const createAnalysisBody = z
   .object({
     ref: nonEmptyString,
@@ -262,6 +276,9 @@ function parseWith<T>(schema: z.ZodType<T>, value: unknown): T {
 
 /** Validates (and strips) a parsed body for `handler`; unknown keys fail. */
 export function validateBody(handler: RouteHandlerKey, body: unknown): unknown {
+  // Cross-field rules that own a documented `details.reason` must see the raw
+  // body before the schema turns the rejection into a generic issue list.
+  if (handler === "projects.create") precheckProjectSource(body);
   const schema = REQ_SCHEMAS[handler]?.body;
   if (schema === undefined) return body;
   return parseWith(schema, body);

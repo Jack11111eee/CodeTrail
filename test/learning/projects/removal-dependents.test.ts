@@ -390,6 +390,15 @@ describe("removal over HTTP", () => {
     expect(refused.status).toBe(400);
     expect(errorCode(refused)).toBe("invalid_input");
     expect(reasonOf(refused)).toBe("confirm_required");
+
+    // `?confirm=false` is not a confirmation either: the schema accepts the
+    // string and the removal service refuses it before writing (§5.8).
+    const explicitlyFalse = await del(
+      `/api/projects/${created.projectId}?confirm=false`,
+    );
+    expect(explicitlyFalse.status).toBe(400);
+    expect(errorCode(explicitlyFalse)).toBe("invalid_input");
+    expect(reasonOf(explicitlyFalse)).toBe("confirm_required");
     expect((await get(`/api/projects/${created.projectId}`)).status).toBe(200);
 
     // A citation is available while the project is live, and marked
@@ -478,5 +487,31 @@ describe("removal over HTTP", () => {
 
     // Job routes are not project-scoped in §5.8.
     expect((await get(`/api/jobs/${analysis.jobId}`)).status).toBe(200);
+  });
+
+  it("re-importing a removed path creates a new project and never undeletes the old one", async () => {
+    const localPath = fixturePath("last-mile-mini");
+    const first = jsonBody(
+      await post("/api/projects", { localPath }),
+    ) as CreateProjectResponse;
+    expect(
+      (await del(`/api/projects/${first.projectId}?confirm=true`)).status,
+    ).toBe(200);
+
+    const second = jsonBody(
+      await post("/api/projects", { localPath }),
+    ) as CreateProjectResponse;
+    expect(second.projectId).not.toBe(first.projectId);
+    expect(second.repoId).toBe(first.repoId);
+
+    // The old link stays gone forever; the new project is independent.
+    expect((await get(`/api/projects/${first.projectId}`)).status).toBe(410);
+    expect((await get(`/api/projects/${second.projectId}`)).status).toBe(200);
+    const list = jsonBody(await get("/api/projects")) as {
+      projects: { projectId: string }[];
+    };
+    const ids = list.projects.map((project) => project.projectId);
+    expect(ids).not.toContain(first.projectId);
+    expect(ids).toContain(second.projectId);
   });
 });

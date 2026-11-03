@@ -45,6 +45,14 @@ function scratch(name: string): string {
   return dir;
 }
 
+/** `error.details.reason`, the closed-vocabulary discriminator (§3.2). */
+function reasonOf(response: StubResponse): unknown {
+  const body = jsonBody(response) as {
+    error?: { details?: { reason?: unknown } };
+  };
+  return body.error?.details?.reason;
+}
+
 describe("import validation", () => {
   it("maps non-Git, missing, relative and both-source bodies to distinct errors", async () => {
     const plain = scratch("plain");
@@ -53,27 +61,37 @@ describe("import validation", () => {
     const nonGit = await post({ localPath: plain });
     expect(nonGit.status).toBe(400);
     expect(errorCode(nonGit)).toBe("invalid_input");
-    expect(
-      (jsonBody(nonGit) as { error: { details?: { reason?: string } } }).error
-        .details?.reason,
-    ).toBe("not_git_repo");
+    expect(reasonOf(nonGit)).toBe("not_git_repo");
 
     const missing = await post({
       localPath: path.join(plain, "does-not-exist"),
     });
     expect(missing.status).toBe(400);
     expect(errorCode(missing)).toBe("invalid_path");
+    // §5.1 pairs the missing-path code with the `invalid_path` reason.
+    expect(reasonOf(missing)).toBe("invalid_path");
+
+    // A subdirectory of a work tree is not a valid project root either.
+    const subdirectory = await post({
+      localPath: path.join(fixturePath("last-mile-mini"), "src"),
+    });
+    expect(subdirectory.status).toBe(400);
+    expect(errorCode(subdirectory)).toBe("invalid_input");
+    expect(reasonOf(subdirectory)).toBe("not_git_repo");
 
     const relative = await post({ localPath: "relative/path" });
     expect(relative.status).toBe(400);
     expect(errorCode(relative)).toBe("invalid_input");
 
+    // §5.1: supplying both sources has its own documented reason
+    // (`local_path_and_url`), not a generic Zod issue list (AC-PRJ-02).
     const both = await post({
       localPath: fixturePath("last-mile-mini"),
       githubUrl: "https://github.com/acme/widgets",
     });
     expect(both.status).toBe(400);
     expect(errorCode(both)).toBe("invalid_input");
+    expect(reasonOf(both)).toBe("local_path_and_url");
 
     const empty = await post({});
     expect(empty.status).toBe(400);

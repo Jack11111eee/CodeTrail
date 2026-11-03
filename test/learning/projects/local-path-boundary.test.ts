@@ -52,11 +52,35 @@ function post(path: string, body: unknown): Promise<StubResponse> {
 
 describe("absolute path boundary", () => {
   it("rejects a path-shaped ref on the analyses route", async () => {
-    const response = await post(`/api/projects/${projectId}/analyses`, {
-      ref: "/etc/passwd",
-    });
-    expect(response.status).toBe(403);
-    expect(errorCode(response)).toBe("out_of_scope_path");
+    for (const ref of [
+      "/etc/passwd",
+      "\\\\server\\share\\repo",
+      "C:\\Users\\repo",
+      "..",
+      "/tmp/repo.git",
+    ]) {
+      const response = await post(`/api/projects/${projectId}/analyses`, {
+        ref,
+      });
+      expect(response.status).toBe(403);
+      expect(errorCode(response)).toBe("out_of_scope_path");
+    }
+  });
+
+  it("rejects path-shaped refs on the comparison route", async () => {
+    for (const body of [
+      { baseSha: "/etc/passwd", headSha: "HEAD" },
+      { baseSha: "HEAD", headSha: "/etc/passwd" },
+      { baseSha: "C:\\repo", headSha: "HEAD" },
+      { baseSha: "HEAD", headSha: "../../etc/passwd" },
+    ]) {
+      const response = await post(
+        `/api/projects/${projectId}/comparisons`,
+        body,
+      );
+      expect(response.status).toBe(403);
+      expect(errorCode(response)).toBe("out_of_scope_path");
+    }
   });
 
   it("rejects path-shaped ids on the generation reads", async () => {
