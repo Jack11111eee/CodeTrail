@@ -931,6 +931,11 @@ export async function runPhase(through, options = {}) {
  * declared list — and then checks the ordering invariant. A red phase blocks
  * nothing from being *observed*: later phases still run, so a gate that is
  * green while A is red is detected rather than hidden.
+ *
+ * The one exception is a **simulated** red: the phase was never actually run,
+ * so continuing would only manufacture a "green while red" artifact and spend
+ * minutes running suites whose verdict is already known to be unusable. The
+ * simulation still forces the failure and the ordering result.
  */
 export async function verifyOrder(options = {}) {
   const opts = optionsOf(options);
@@ -944,7 +949,9 @@ export async function verifyOrder(options = {}) {
       results.push({ phase, passed: false, pending: true, stages: [] });
       continue;
     }
-    results.push(await runStage(stage, { root, simulated }));
+    const result = await runStage(stage, { root, simulated });
+    results.push(result);
+    if (simulated.has(phase) && result.passed !== true) break;
   }
 
   const order = checkOrder(results);
@@ -1046,7 +1053,12 @@ function parseArgs(argv) {
 function failureLine(result, verifyOrderMode) {
   if (verifyOrderMode) {
     if (result.order?.greenWhileRed !== undefined) {
-      return `verify-order failed: phase ${result.order.greenWhileRed} is green while ${result.order.brokenBy} is red`;
+      // Name the red phase first: the ordering contract is "no later gate is
+      // green while an earlier one is red", and an operator needs the culprit.
+      return (
+        `verify-order failed: phase ${result.order.brokenBy} is red; ` +
+        `phase ${result.order.greenWhileRed} is green`
+      );
     }
     if (result.order?.brokenBy !== undefined) {
       return `verify-order failed: phase ${result.order.brokenBy} is red; later phases cannot be certified`;
