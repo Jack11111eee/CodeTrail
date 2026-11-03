@@ -12,7 +12,12 @@ import { registerRouteModule } from "../../../src/learning/api/router.ts";
 import { conversationsModule } from "../../../src/learning/api/routes/conversations.ts";
 import { generationsRoutes } from "../../../src/learning/api/routes/generations.ts";
 import { createLearningServer } from "../../../src/learning/api/server.ts";
-import { resolveDataPaths, ensureDataDir, knowledgePath, mirrorPath } from "../../../src/learning/config/paths.ts";
+import {
+  resolveDataPaths,
+  ensureDataDir,
+  knowledgePath,
+  mirrorPath,
+} from "../../../src/learning/config/paths.ts";
 import type {
   AppDeps,
   GenerationId,
@@ -21,9 +26,15 @@ import type {
   SourceId,
   RunningServer,
 } from "../../../src/learning/contracts/index.ts";
-import { repoIdFromIdentity, sliceHash } from "../../../src/learning/contracts/index.ts";
+import {
+  repoIdFromIdentity,
+  sliceHash,
+} from "../../../src/learning/contracts/index.ts";
 import { createExternalDocService } from "../../../src/learning/evidence/external.ts";
-import { createSourceRegistry, repoSourceId } from "../../../src/learning/evidence/registry.ts";
+import {
+  createSourceRegistry,
+  repoSourceId,
+} from "../../../src/learning/evidence/registry.ts";
 import { createSnapshotService } from "../../../src/learning/projects/snapshot.ts";
 import { normalizeScope } from "../../../src/learning/projects/scope.ts";
 import { createConversationService } from "../../../src/learning/qa/conversations.ts";
@@ -171,7 +182,10 @@ async function seed(): Promise<Fixture> {
   git(["commit", "--quiet", "-m", "init"], sourceRepo);
   const commitSha = git(["rev-parse", "HEAD"], sourceRepo);
 
-  const paths = resolveDataPaths({ ...process.env, CODETRAIL_DATA_DIR: dataDir });
+  const paths = resolveDataPaths({
+    ...process.env,
+    CODETRAIL_DATA_DIR: dataDir,
+  });
   await ensureDataDir(paths);
 
   const clock = createClock(NOW);
@@ -270,7 +284,9 @@ async function seed(): Promise<Fixture> {
   ]);
 
   const conversations = createConversationService({ db, repos, clock });
-  const conversation = await conversations.create({ generationIds: [generationId] });
+  const conversation = await conversations.create({
+    generationIds: [generationId],
+  });
   await conversations.appendUserMessage(
     conversation.conversationId,
     "这个文件返回什么？",
@@ -284,7 +300,9 @@ async function seed(): Promise<Fixture> {
     JSON.stringify({ kind: "token", token: CANARY, login: null }),
     { mode: 0o600 },
   );
-  fs.writeFileSync(paths.session, JSON.stringify({ token: CANARY }), { mode: 0o600 });
+  fs.writeFileSync(paths.session, JSON.stringify({ token: CANARY }), {
+    mode: 0o600,
+  });
   fs.mkdirSync(paths.logs, { recursive: true });
   fs.writeFileSync(
     path.join(paths.logs, "codetrail.jsonl"),
@@ -357,7 +375,11 @@ describe("backup and restore", () => {
 
     const manifest = JSON.parse(
       fs.readFileSync(path.join(fixture.backupDir, "manifest.json"), "utf8"),
-    ) as { schemaVersion: number; sourceRoot: string; files: { path: string }[] };
+    ) as {
+      schemaVersion: number;
+      sourceRoot: string;
+      files: { path: string }[];
+    };
     expect(manifest.schemaVersion).toBe(1);
     expect(manifest.sourceRoot).toBe(fs.realpathSync(fixture.dataDir));
     const listed = manifest.files.map((file) => file.path);
@@ -368,14 +390,17 @@ describe("backup and restore", () => {
     // Every manifest hash matches the bytes on disk.
     for (const file of backup.files) {
       if (file.path === "manifest.json") continue;
-      expect(`sha256:${sha256File(path.join(fixture.backupDir, file.path))}`).toBe(
-        file.sha256,
-      );
+      expect(
+        `sha256:${sha256File(path.join(fixture.backupDir, file.path))}`,
+      ).toBe(file.sha256);
     }
 
     // No archive file carries the token canary.
     for (const relative of listFiles(fixture.backupDir)) {
-      const text = fs.readFileSync(path.join(fixture.backupDir, relative), "utf8");
+      const text = fs.readFileSync(
+        path.join(fixture.backupDir, relative),
+        "utf8",
+      );
       expect(text).not.toContain(CANARY);
     }
   });
@@ -397,18 +422,28 @@ describe("backup and restore", () => {
     const repos = createRepositories(db);
 
     // Absolute path columns were rewritten off the old root.
-    expect(repos.repos.byId(fixture.repoId)?.mirrorPath.startsWith(restoredPaths.root)).toBe(true);
     expect(
-      repos.snapshots.byCommit(fixture.repoId, fixture.commitSha)?.worktreePath.startsWith(
-        restoredPaths.root,
-      ),
+      repos.repos
+        .byId(fixture.repoId)
+        ?.mirrorPath.startsWith(restoredPaths.root),
     ).toBe(true);
     expect(
-      repos.generations.byId(fixture.generationId)?.contentDir.startsWith(restoredPaths.root),
+      repos.snapshots
+        .byCommit(fixture.repoId, fixture.commitSha)
+        ?.worktreePath.startsWith(restoredPaths.root),
+    ).toBe(true);
+    expect(
+      repos.generations
+        .byId(fixture.generationId)
+        ?.contentDir.startsWith(restoredPaths.root),
     ).toBe(true);
 
     const conversations = createConversationService({ db, repos, clock });
-    const snapshotService = createSnapshotService({ paths: restoredPaths, repos, clock });
+    const snapshotService = createSnapshotService({
+      paths: restoredPaths,
+      repos,
+      clock,
+    });
     const external = createExternalDocService({ paths: restoredPaths, clock });
     const registry = createSourceRegistry({
       clock,
@@ -456,9 +491,9 @@ describe("backup and restore", () => {
       `/api/generations/${fixture.generationId}/lessons/${fixture.lessonId}`,
     );
     expect(detail.status).toBe(200);
-    expect((detail.json as { lesson: { lessonId: string } }).lesson.lessonId).toBe(
-      fixture.lessonId,
-    );
+    expect(
+      (detail.json as { lesson: { lessonId: string } }).lesson.lessonId,
+    ).toBe(fixture.lessonId);
 
     const messages = await harness.request(
       `/api/conversations/${fixture.conversationId}/messages`,

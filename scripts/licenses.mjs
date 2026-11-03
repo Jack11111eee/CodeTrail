@@ -47,7 +47,9 @@ function lockfileEntries(lockfile) {
     // Only the two-space indentation is a package key. Nested fields such as
     // `peerDependencies` sit at four spaces and would otherwise be captured as
     // a bogus package named after their first quoted segment.
-    const match = /^ {2}(?:'([^']+)'|"([^"]+)"|([^\s'"][^:]*?)):\s*$/u.exec(line);
+    const match = /^ {2}(?:'([^']+)'|"([^"]+)"|([^\s'"][^:]*?)):\s*$/u.exec(
+      line,
+    );
     if (match) entries.push(match[1] ?? match[2] ?? match[3]);
   }
   return entries;
@@ -79,7 +81,11 @@ function licenseField(manifest) {
   if (manifest === null) return null;
   const value = manifest.license;
   if (typeof value === "string" && value.trim() !== "") return value.trim();
-  if (value !== null && typeof value === "object" && typeof value.type === "string") {
+  if (
+    value !== null &&
+    typeof value === "object" &&
+    typeof value.type === "string"
+  ) {
     return value.type.trim();
   }
   if (Array.isArray(manifest.licenses)) {
@@ -103,7 +109,12 @@ function virtualStoreName(name) {
 
 /** Reads the installed manifest for `name@version`, if it is on disk. */
 function installedManifest(root, name, version) {
-  const direct = path.join(root, "node_modules", ...name.split("/"), "package.json");
+  const direct = path.join(
+    root,
+    "node_modules",
+    ...name.split("/"),
+    "package.json",
+  );
   const found = readJson(direct);
   if (found !== null) return found;
 
@@ -127,7 +138,13 @@ function installedManifest(root, name, version) {
       continue;
     }
     const manifest = readJson(
-      path.join(store, entry, "node_modules", ...name.split("/"), "package.json"),
+      path.join(
+        store,
+        entry,
+        "node_modules",
+        ...name.split("/"),
+        "package.json",
+      ),
     );
     if (manifest !== null) return manifest;
   }
@@ -153,7 +170,8 @@ export function collectLicenses(options = {}) {
     byKey.set(key, {
       name,
       version: String(version ?? ""),
-      license: typeof license === "string" && license !== "" ? license : UNKNOWN,
+      license:
+        typeof license === "string" && license !== "" ? license : UNKNOWN,
     });
   };
 
@@ -206,7 +224,9 @@ function main(argv) {
     return 2;
   }
   if (options.help) {
-    process.stdout.write("usage: node scripts/licenses.mjs [--json] [--root <dir>]\n");
+    process.stdout.write(
+      "usage: node scripts/licenses.mjs [--json] [--root <dir>]\n",
+    );
     return 0;
   }
   const report = collectLicenses({ root: options.root });

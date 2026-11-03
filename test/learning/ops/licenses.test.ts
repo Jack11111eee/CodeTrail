@@ -33,7 +33,11 @@ interface Report {
   packages: { name: string; version: string; license: string }[];
 }
 
-function runLicenses(args: string[]): { status: number | null; report: Report; stderr: string } {
+function runLicenses(args: string[]): {
+  status: number | null;
+  report: Report;
+  stderr: string;
+} {
   const result = spawnSync(process.execPath, [SCRIPT, "--json", ...args], {
     encoding: "utf8",
     timeout: 60_000,
@@ -50,7 +54,9 @@ describe("licence report", () => {
   it("includes the fork as MIT and sorts by package name", () => {
     const { report } = runLicenses([]);
     const names = report.packages.map((entry) => entry.name);
-    expect(names).toEqual([...names].sort((left, right) => left.localeCompare(right)));
+    expect(names).toEqual(
+      [...names].sort((left, right) => left.localeCompare(right)),
+    );
 
     const fork = report.packages.find((entry) => entry.name === "openwiki");
     expect(fork).toBeDefined();
@@ -83,7 +89,11 @@ describe("licence report", () => {
     fs.mkdirSync(path.join(root, "node_modules", "alpha"), { recursive: true });
     fs.writeFileSync(
       path.join(root, "node_modules", "alpha", "package.json"),
-      JSON.stringify({ name: "alpha", version: "1.0.0", license: "Apache-2.0" }),
+      JSON.stringify({
+        name: "alpha",
+        version: "1.0.0",
+        license: "Apache-2.0",
+      }),
       "utf8",
     );
     fs.mkdirSync(path.join(root, "node_modules", "beta"), { recursive: true });
@@ -99,15 +109,15 @@ describe("licence report", () => {
       "beta",
       "forkfixture",
     ]);
-    expect(report.packages.find((entry) => entry.name === "alpha")?.license).toBe(
-      "Apache-2.0",
-    );
-    expect(report.packages.find((entry) => entry.name === "beta")?.license).toBe(
-      "unknown",
-    );
-    expect(report.packages.find((entry) => entry.name === "forkfixture")?.license).toBe(
-      "MIT",
-    );
+    expect(
+      report.packages.find((entry) => entry.name === "alpha")?.license,
+    ).toBe("Apache-2.0");
+    expect(
+      report.packages.find((entry) => entry.name === "beta")?.license,
+    ).toBe("unknown");
+    expect(
+      report.packages.find((entry) => entry.name === "forkfixture")?.license,
+    ).toBe("MIT");
   });
 
   it("parses quoted scoped keys and ignores nested dependency blocks", () => {
@@ -162,9 +172,9 @@ describe("licence report", () => {
     const names = report.packages.map((entry) => entry.name);
     expect(names).toEqual(["@scope/pkg", "alpha", "forkfixture"]);
     expect(names.some((name) => name.includes("'"))).toBe(false);
-    expect(report.packages.find((entry) => entry.name === "@scope/pkg")?.license).toBe(
-      "BSD-3-Clause",
-    );
+    expect(
+      report.packages.find((entry) => entry.name === "@scope/pkg")?.license,
+    ).toBe("BSD-3-Clause");
     // The nested `peerDependencies` key is not a package entry.
     expect(names).not.toContain("@nested/dep");
   });

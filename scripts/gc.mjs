@@ -122,7 +122,9 @@ export async function runGc(options = {}) {
     const { DatabaseSync } = await import("node:sqlite");
     const database = new DatabaseSync(paths.db, { readOnly: true });
     try {
-      for (const row of database.prepare("SELECT job_id, state FROM jobs").all()) {
+      for (const row of database
+        .prepare("SELECT job_id, state FROM jobs")
+        .all()) {
         jobs.set(row.job_id, row.state);
       }
       for (const row of database
@@ -203,7 +205,9 @@ async function main(argv) {
     return 2;
   }
   if (options.help) {
-    process.stdout.write("usage: node scripts/gc.mjs [--json] [--data-dir <dir>]\n");
+    process.stdout.write(
+      "usage: node scripts/gc.mjs [--json] [--data-dir <dir>]\n",
+    );
     return 0;
   }
 

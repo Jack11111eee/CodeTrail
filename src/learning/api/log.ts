@@ -66,10 +66,12 @@ function sanitize(value: unknown, redact: (text: string) => string): unknown {
     return value;
   }
   if (typeof value === "bigint") return value.toString();
-  if (typeof value === "function" || typeof value === "symbol") return undefined;
+  if (typeof value === "function" || typeof value === "symbol")
+    return undefined;
   if (value instanceof Date) return value.toISOString();
   if (value instanceof Error) return redact(value.message);
-  if (Array.isArray(value)) return value.map((entry) => sanitize(entry, redact));
+  if (Array.isArray(value))
+    return value.map((entry) => sanitize(entry, redact));
   if (isPlainObject(value)) {
     const out: Record<string, unknown> = {};
     for (const [key, entry] of Object.entries(value)) {
@@ -116,9 +118,12 @@ export function createJsonLogger(options: JsonLoggerOptions): JsonLogger {
       // two mandatory keys immediately; the timestamp follows. They go through
       // the same redactor as every other string, never the raw input.
       const line: Record<string, unknown> = {
-        event: typeof fields.event === "string" ? fields.event : redact(event.event),
+        event:
+          typeof fields.event === "string" ? fields.event : redact(event.event),
         level:
-          typeof fields.level === "string" ? fields.level : redact(event.level ?? "info"),
+          typeof fields.level === "string"
+            ? fields.level
+            : redact(event.level ?? "info"),
       };
       if (typeof fields.at === "string") {
         line.at = fields.at;

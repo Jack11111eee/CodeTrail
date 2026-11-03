@@ -111,11 +111,14 @@ function listFilesRecursive(root, prefix = "") {
   } catch {
     return out;
   }
-  for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+  for (const entry of entries.sort((left, right) =>
+    left.name.localeCompare(right.name),
+  )) {
     const relative = prefix === "" ? entry.name : `${prefix}/${entry.name}`;
     const absolute = path.join(root, entry.name);
     if (entry.isSymbolicLink()) continue;
-    if (entry.isDirectory()) out.push(...listFilesRecursive(absolute, relative));
+    if (entry.isDirectory())
+      out.push(...listFilesRecursive(absolute, relative));
     else if (entry.isFile()) out.push(relative);
   }
   return out;
@@ -179,7 +182,9 @@ function collectSecrets(paths, env) {
       secrets.push(session.token);
     }
   }
-  return secrets.filter((secret) => typeof secret === "string" && secret.length >= 4);
+  return secrets.filter(
+    (secret) => typeof secret === "string" && secret.length >= 4,
+  );
 }
 
 function assertNoCanary(root, secrets) {
@@ -225,7 +230,8 @@ function runGit(args, { env, cwd }) {
     timeout: 120_000,
   });
   if (result.error || result.status !== 0) {
-    const detail = `${result.error?.message ?? ""}${result.stderr ?? ""}`.trim();
+    const detail =
+      `${result.error?.message ?? ""}${result.stderr ?? ""}`.trim();
     throw failure("git_failed", `git ${args.join(" ")} failed: ${detail}`, {
       args,
     });
@@ -272,8 +278,14 @@ export async function createBackup(options) {
   const outDir = path.resolve(options.outDir);
   ensureEmptyDirectory(outDir);
   fs.mkdirSync(path.join(outDir, "db"), { recursive: true, mode: 0o700 });
-  fs.mkdirSync(path.join(outDir, "knowledge"), { recursive: true, mode: 0o700 });
-  fs.mkdirSync(path.join(outDir, "git-objects"), { recursive: true, mode: 0o700 });
+  fs.mkdirSync(path.join(outDir, "knowledge"), {
+    recursive: true,
+    mode: 0o700,
+  });
+  fs.mkdirSync(path.join(outDir, "git-objects"), {
+    recursive: true,
+    mode: 0o700,
+  });
 
   // `VACUUM INTO` writes a single consistent database file, including every
   // committed WAL frame; a plain `copyFile` of a live WAL database can lose
@@ -294,13 +306,22 @@ export async function createBackup(options) {
 
   const bundles = [];
   if (fs.existsSync(paths.mirrors)) {
-    for (const entry of fs.readdirSync(paths.mirrors, { withFileTypes: true })) {
+    for (const entry of fs.readdirSync(paths.mirrors, {
+      withFileTypes: true,
+    })) {
       if (!entry.isDirectory() || !entry.name.endsWith(".git")) continue;
       const repoId = entry.name.slice(0, -".git".length);
       const bundle = path.join(outDir, "git-objects", `${repoId}.bundle`);
       try {
         runGit(
-          ["-C", path.join(paths.mirrors, entry.name), "bundle", "create", bundle, "--all"],
+          [
+            "-C",
+            path.join(paths.mirrors, entry.name),
+            "bundle",
+            "create",
+            bundle,
+            "--all",
+          ],
           { env, cwd: REPO_ROOT },
         );
         bundles.push({ repoId, file: `git-objects/${repoId}.bundle` });
@@ -338,7 +359,14 @@ export async function createBackup(options) {
   return {
     outDir,
     manifest,
-    files: [...files, { path: "manifest.json", sha256: sha256File(path.join(outDir, "manifest.json")), bytes: fs.statSync(path.join(outDir, "manifest.json")).size }],
+    files: [
+      ...files,
+      {
+        path: "manifest.json",
+        sha256: sha256File(path.join(outDir, "manifest.json")),
+        bytes: fs.statSync(path.join(outDir, "manifest.json")).size,
+      },
+    ],
     bundles,
     bytes: treeBytes(outDir),
   };
@@ -348,7 +376,8 @@ function rewritePath(value, oldRoot, newRoot) {
   if (typeof value !== "string" || value === "") return value;
   if (value === oldRoot) return newRoot;
   const prefix = `${oldRoot}${path.sep}`;
-  if (value.startsWith(prefix)) return path.join(newRoot, value.slice(prefix.length));
+  if (value.startsWith(prefix))
+    return path.join(newRoot, value.slice(prefix.length));
   // A POSIX old root on a different platform still uses "/".
   const posixPrefix = `${oldRoot}/`;
   if (value.startsWith(posixPrefix)) {
@@ -424,7 +453,8 @@ export async function restoreBackup(options) {
     copyTree(knowledgeSource, paths.knowledge);
   }
 
-  const oldRoot = typeof manifest.sourceRoot === "string" ? manifest.sourceRoot : "";
+  const oldRoot =
+    typeof manifest.sourceRoot === "string" ? manifest.sourceRoot : "";
   const newRoot = paths.root;
 
   const { DatabaseSync } = await import("node:sqlite");
@@ -505,7 +535,8 @@ export async function restoreBackup(options) {
     mirrorByRepo.set(row.repo_id, target);
     const bundle = path.join(fromDir, "git-objects", `${row.repo_id}.bundle`);
     if (fs.existsSync(bundle)) {
-      if (fs.existsSync(target)) fs.rmSync(target, { recursive: true, force: true });
+      if (fs.existsSync(target))
+        fs.rmSync(target, { recursive: true, force: true });
       fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
       runGit(["clone", "--mirror", bundle, target], { env, cwd: REPO_ROOT });
     } else if (!fs.existsSync(target)) {
@@ -516,14 +547,29 @@ export async function restoreBackup(options) {
   for (const row of snapshotRows) {
     const mirror = mirrorByRepo.get(row.repoId);
     if (mirror === undefined || !fs.existsSync(mirror)) {
-      failures.push({ repoId: row.repoId, commitSha: row.commitSha, reason: "mirror_missing" });
+      failures.push({
+        repoId: row.repoId,
+        commitSha: row.commitSha,
+        reason: "mirror_missing",
+      });
       continue;
     }
     if (fs.existsSync(row.worktreePath)) continue;
-    fs.mkdirSync(path.dirname(row.worktreePath), { recursive: true, mode: 0o700 });
+    fs.mkdirSync(path.dirname(row.worktreePath), {
+      recursive: true,
+      mode: 0o700,
+    });
     try {
       runGit(
-        ["-C", mirror, "worktree", "add", "--detach", row.worktreePath, row.commitSha],
+        [
+          "-C",
+          mirror,
+          "worktree",
+          "add",
+          "--detach",
+          row.worktreePath,
+          row.commitSha,
+        ],
         { env, cwd: REPO_ROOT },
       );
       worktrees.push(row.worktreePath);
@@ -547,7 +593,13 @@ export async function restoreBackup(options) {
 // ── CLI ─────────────────────────────────────────────────────────────────────
 
 function parseArgs(argv) {
-  const options = { out: null, from: null, dataDir: null, json: false, help: false };
+  const options = {
+    out: null,
+    from: null,
+    dataDir: null,
+    json: false,
+    help: false,
+  };
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     if (argument === "--out") {

@@ -90,7 +90,10 @@ describe("accept harness", () => {
     ]);
 
     const report = JSON.parse(
-      fs.readFileSync(path.join(root, ".artifacts", "accept", "report.json"), "utf8"),
+      fs.readFileSync(
+        path.join(root, ".artifacts", "accept", "report.json"),
+        "utf8",
+      ),
     ) as { ok: boolean; steps: { name: string; ok: boolean }[] };
     expect(report.ok).toBe(true);
     expect(report.steps.map((step) => step.name)).toEqual([
@@ -119,8 +122,14 @@ describe("accept harness", () => {
     ]);
 
     const report = JSON.parse(
-      fs.readFileSync(path.join(root, ".artifacts", "accept", "report.json"), "utf8"),
-    ) as { ok: boolean; steps: { name: string; ok: boolean; skipped?: boolean }[] };
+      fs.readFileSync(
+        path.join(root, ".artifacts", "accept", "report.json"),
+        "utf8",
+      ),
+    ) as {
+      ok: boolean;
+      steps: { name: string; ok: boolean; skipped?: boolean }[];
+    };
     expect(report.ok).toBe(false);
     const build = report.steps.find((step) => step.name === "build");
     expect(build).toMatchObject({ ok: false, exitCode: 7 });

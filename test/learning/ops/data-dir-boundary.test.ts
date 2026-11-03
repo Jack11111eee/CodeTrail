@@ -100,7 +100,9 @@ describe("data-directory boundary", () => {
     expect(() => assertInsideDataDir(paths, "../escape")).toThrowError(
       /out_of_scope_path|超出允许范围/u,
     );
-    expect(() => assertInsideDataDir(paths, path.join(parent, "outside"))).toThrow();
+    expect(() =>
+      assertInsideDataDir(paths, path.join(parent, "outside")),
+    ).toThrow();
     const inside = path.join(paths.knowledge, "lesson.json");
     expect(assertInsideDataDir(paths, inside)).toBe(
       path.join(fs.realpathSync(dataDir), "knowledge", "lesson.json"),

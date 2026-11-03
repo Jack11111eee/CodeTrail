@@ -54,7 +54,11 @@ describe("structured JSON logs", () => {
     });
 
     logger.event({ event: "job_started", level: "info", jobId: "j_1" });
-    logger.event({ event: "job_progress", jobId: "j_1", progress: { pages: 2 } });
+    logger.event({
+      event: "job_progress",
+      jobId: "j_1",
+      progress: { pages: 2 },
+    });
 
     const lines = readLines(file);
     expect(lines).toHaveLength(2);
@@ -122,6 +126,8 @@ describe("structured JSON logs", () => {
       clock: createClock("2026-01-01T00:00:00.000Z"),
       redact,
     });
-    expect(() => logger.event({ event: "shutdown", level: "info" })).not.toThrow();
+    expect(() =>
+      logger.event({ event: "shutdown", level: "info" }),
+    ).not.toThrow();
   });
 });

@@ -82,7 +82,10 @@ interface Seed {
 
 function seed(): Seed {
   const dataDir = makeTempDir();
-  const paths = resolveDataPaths({ ...process.env, CODETRAIL_DATA_DIR: dataDir });
+  const paths = resolveDataPaths({
+    ...process.env,
+    CODETRAIL_DATA_DIR: dataDir,
+  });
   fs.mkdirSync(paths.root, { recursive: true });
   // `ensureDataDir` is async; the directories this test needs are created
   // synchronously by the helpers below, so only the db parent matters.
@@ -153,7 +156,11 @@ function seed(): Seed {
     baselineFromGenerationId: null,
   };
 
-  const insertJob = (jobId: string, state: JobRecord["state"], dedupe: string) => {
+  const insertJob = (
+    jobId: string,
+    state: JobRecord["state"],
+    dedupe: string,
+  ) => {
     repos.jobs.insert({
       jobId: jobId as JobId,
       dedupeKey: dedupe,
@@ -192,7 +199,10 @@ function seed(): Seed {
   const mirror = mirrorPath(paths, REPO);
   writeFile(path.join(mirror, "HEAD"), "ref: refs/heads/main\n");
   const worktree = worktreePath(paths, REPO, "a".repeat(40));
-  writeFile(path.join(worktree, "src", "index.ts"), "export const keep = true;\n");
+  writeFile(
+    path.join(worktree, "src", "index.ts"),
+    "export const keep = true;\n",
+  );
 
   return {
     dataDir,

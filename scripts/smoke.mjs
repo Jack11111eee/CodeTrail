@@ -111,7 +111,12 @@ function request({ port, path: requestPath, method = "GET", headers = {} }) {
           } catch {
             // A non-JSON body (HTML, empty) is represented as null.
           }
-          resolve({ status: res.statusCode ?? 0, headers: res.headers, body, json });
+          resolve({
+            status: res.statusCode ?? 0,
+            headers: res.headers,
+            body,
+            json,
+          });
         });
       },
     );

@@ -134,7 +134,12 @@ export async function runAccept(options = {}) {
 
   for (const step of ACCEPT_STEPS) {
     if (failed) {
-      steps.push({ name: step.name, script: step.script, skipped: true, ok: false });
+      steps.push({
+        name: step.name,
+        script: step.script,
+        skipped: true,
+        ok: false,
+      });
       continue;
     }
     const began = Date.now();
