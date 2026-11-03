@@ -44,8 +44,11 @@ function lockfileEntries(lockfile) {
     }
     if (!inPackages) continue;
     if (/^\S/u.test(line) && !line.startsWith("#")) break;
-    const match = /^ {2}(?:"|')?(.+?)(?:"|')?:\s*$/u.exec(line);
-    if (match) entries.push(match[1]);
+    // Only the two-space indentation is a package key. Nested fields such as
+    // `peerDependencies` sit at four spaces and would otherwise be captured as
+    // a bogus package named after their first quoted segment.
+    const match = /^ {2}(?:'([^']+)'|"([^"]+)"|([^\s'"][^:]*?)):\s*$/u.exec(line);
+    if (match) entries.push(match[1] ?? match[2] ?? match[3]);
   }
   return entries;
 }
@@ -114,7 +117,15 @@ function installedManifest(root, name, version) {
     return null;
   }
   for (const entry of candidates) {
-    if (entry !== prefix && !entry.startsWith(`${prefix}(`)) continue;
+    // pnpm 9 uses `name@version(peer@version)`; pnpm 10+ uses an underscore
+    // separator (`name@version_peer@version`). Both are the same package.
+    if (
+      entry !== prefix &&
+      !entry.startsWith(`${prefix}(`) &&
+      !entry.startsWith(`${prefix}_`)
+    ) {
+      continue;
+    }
     const manifest = readJson(
       path.join(store, entry, "node_modules", ...name.split("/"), "package.json"),
     );

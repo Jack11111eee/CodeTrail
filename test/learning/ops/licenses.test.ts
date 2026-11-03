@@ -109,4 +109,63 @@ describe("licence report", () => {
       "MIT",
     );
   });
+
+  it("parses quoted scoped keys and ignores nested dependency blocks", () => {
+    const root = makeTempDir();
+    fs.writeFileSync(
+      path.join(root, "package.json"),
+      JSON.stringify({ name: "forkfixture", version: "1.0.0", license: "MIT" }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(root, "pnpm-lock.yaml"),
+      [
+        "lockfileVersion: '9.0'",
+        "",
+        "packages:",
+        "",
+        "  '@scope/pkg@3.0.0':",
+        "    resolution: {integrity: sha512-scope}",
+        "    peerDependencies:",
+        "      '@nested/dep': ^1.0.0",
+        "",
+        "  alpha@1.0.0:",
+        "    resolution: {integrity: sha512-alpha}",
+        "",
+        "snapshots:",
+        "",
+        "  '@scope/pkg@3.0.0': {}",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    fs.mkdirSync(path.join(root, "node_modules", "@scope", "pkg"), {
+      recursive: true,
+    });
+    fs.writeFileSync(
+      path.join(root, "node_modules", "@scope", "pkg", "package.json"),
+      JSON.stringify({
+        name: "@scope/pkg",
+        version: "3.0.0",
+        license: "BSD-3-Clause",
+      }),
+      "utf8",
+    );
+    fs.mkdirSync(path.join(root, "node_modules", "alpha"), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, "node_modules", "alpha", "package.json"),
+      JSON.stringify({ name: "alpha", version: "1.0.0", license: "MIT" }),
+      "utf8",
+    );
+
+    const { report } = runLicenses(["--root", root]);
+    const names = report.packages.map((entry) => entry.name);
+    expect(names).toEqual(["@scope/pkg", "alpha", "forkfixture"]);
+    expect(names.some((name) => name.includes("'"))).toBe(false);
+    expect(report.packages.find((entry) => entry.name === "@scope/pkg")?.license).toBe(
+      "BSD-3-Clause",
+    );
+    // The nested `peerDependencies` key is not a package entry.
+    expect(names).not.toContain("@nested/dep");
+  });
 });
