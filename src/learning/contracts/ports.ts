@@ -94,6 +94,10 @@ export interface QaSelection {
   lessonId?: LessonId;
   moduleId?: string;
   sourceId?: SourceId;
+  /** Every evidence id bound to the clicked node (AC-UI-04). */
+  sourceIds?: SourceId[];
+  /** The generation's analysed commit, never the repository's latest head. */
+  commitSha?: string;
   codeLocation?: { path: string; lines: { start: number; end: number } };
 }
 

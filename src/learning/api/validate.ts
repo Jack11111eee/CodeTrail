@@ -91,6 +91,10 @@ const selection = z
     lessonId: id.optional(),
     moduleId: nonEmptyString.optional(),
     sourceId: id.optional(),
+    // A diagram node can bind several evidence ids; the click submits them all
+    // together with the generation's commit (AC-UI-04).
+    sourceIds: z.array(id).max(64).optional(),
+    commitSha: nonEmptyString.max(128).optional(),
     codeLocation: codeLocation.optional(),
   })
   .strict();
@@ -192,7 +196,9 @@ const putModelSettingsBody = z
   })
   .strict();
 
-const limitString = z.string().regex(/^\d+$/u, "must be a non-negative integer");
+const limitString = z
+  .string()
+  .regex(/^\d+$/u, "must be a non-negative integer");
 
 const deleteProjectQuery = z.object({ confirm: z.literal("true") }).strict();
 const messageListQuery = z
@@ -204,7 +210,9 @@ const changesListQuery = z
 const termsListQuery = z.object({ q: z.string().optional() }).strict();
 const usageQuery = z
   .object({
-    kind: z.enum(["initial", "update", "comparison", "qa", "change"]).optional(),
+    kind: z
+      .enum(["initial", "update", "comparison", "qa", "change"])
+      .optional(),
   })
   .strict();
 
@@ -241,10 +249,7 @@ export function parseJsonBody(raw: string): unknown {
   }
 }
 
-function parseWith<T>(
-  schema: z.ZodType<T>,
-  value: unknown,
-): T {
+function parseWith<T>(schema: z.ZodType<T>, value: unknown): T {
   const result = schema.safeParse(value);
   if (!result.success) throw fromZod(result.error);
   return result.data;

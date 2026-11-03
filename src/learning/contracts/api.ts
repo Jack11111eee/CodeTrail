@@ -375,6 +375,8 @@ export interface TermsPageModel {
 }
 
 export interface SettingsPageModel {
+  /** The project whose watch controls this page drives; empty when none. */
+  projectId: ProjectId | "";
   model: ModelSettingsView;
   usage: UsageView;
   storage: StorageView;

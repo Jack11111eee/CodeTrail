@@ -266,6 +266,25 @@ async function sendRouteResponse(
     return;
   }
 
+  // The static-UI seam serves CSS/JS assets as raw text. A string body with a
+  // non-JSON content type must not be JSON-quoted.
+  const isTextAsset =
+    typeof response.body === "string" &&
+    contentType !== undefined &&
+    !contentType.toLowerCase().includes("json");
+  if (isTextAsset) {
+    const text = response.body as string;
+    res.statusCode = response.status;
+    for (const [name, value] of Object.entries(headers ?? {})) {
+      res.setHeader(name, value);
+    }
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("Content-Length", Buffer.byteLength(text));
+    res.end(text);
+    return;
+  }
+
   sendJson(res, response.status, response.body, headers);
 }
 
