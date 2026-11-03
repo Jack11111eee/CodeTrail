@@ -68,4 +68,16 @@ describe("reader layout", () => {
       expect(countTestId(html, testid), testid).toBe(1);
     }
   });
+
+  it("renders the QA panel without a conversation or reading position", () => {
+    const html = renderReaderPage(
+      pageContext,
+      readerModel({ conversation: null, readingPosition: null }),
+    );
+    expect(html).toContain("尚无追问");
+    expect(html).toContain("尚无引用");
+    expect(html).toContain("尚无阅读位置");
+    expect(html).toContain('action="/api/conversations"');
+    expect(countTestId(html, "qa-input")).toBe(1);
+  });
 });

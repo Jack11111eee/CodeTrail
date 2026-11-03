@@ -110,4 +110,29 @@ describe("diagram renderer", () => {
     expect(html).toContain('data-node-id="n3"');
     expect(html).toContain('data-evidence-ids=""');
   });
+
+  it("drops edges whose endpoints are absent", () => {
+    const html = renderDiagram(
+      diagram("component", {
+        edges: [
+          {
+            from: "n1",
+            to: "missing",
+            label: "悬空",
+            evidenceIds: [],
+            inferred: false,
+          },
+        ],
+      }),
+    );
+    expect(html).not.toContain('data-edge-id="n1->missing"');
+    expect(html).toContain('data-node-id="n1"');
+  });
+
+  it("renders an empty diagram without crashing", () => {
+    const html = renderDiagram(diagram("sequence", { nodes: [], edges: [] }));
+    expect(countTestId(html, "diagram-sequence")).toBe(1);
+    expect(html).not.toContain("data-node-id");
+    expect(html).toContain("Mermaid 源（只读文本，不会执行）");
+  });
 });

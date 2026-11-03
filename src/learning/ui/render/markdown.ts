@@ -70,15 +70,11 @@ const ALLOWED_TAGS: ReadonlySet<string> = new Set([
 
 /** Tags whose entire content is untrusted executable/foreign content. */
 const SKIP_CONTENT_TAGS: ReadonlySet<string> = new Set([
-  "base",
   "button",
   "embed",
   "form",
   "iframe",
-  "input",
-  "link",
   "math",
-  "meta",
   "noscript",
   "object",
   "script",
@@ -87,6 +83,19 @@ const SKIP_CONTENT_TAGS: ReadonlySet<string> = new Set([
   "svg",
   "template",
   "textarea",
+]);
+
+/**
+ * Void elements that must be dropped *without* swallowing the following
+ * content. GFM task lists render `<input type="checkbox">`, which has no
+ * closing tag; treating it like a container would delete the item text and
+ * everything after it.
+ */
+const VOID_SKIP_TAGS: ReadonlySet<string> = new Set([
+  "base",
+  "input",
+  "link",
+  "meta",
 ]);
 
 const VOID_TAGS: ReadonlySet<string> = new Set(["br", "hr", "img"]);
@@ -373,6 +382,9 @@ export function sanitizeHtml(html: string, opts: SanitizeOptions): string {
       continue;
     }
 
+    // A void element has no content of its own: drop the tag only, so the
+    // following text (a task-list item, say) survives.
+    if (VOID_SKIP_TAGS.has(tag.name)) continue;
     if (SKIP_CONTENT_TAGS.has(tag.name)) {
       index = skipToClosingTag(html, tag.name, index);
       continue;

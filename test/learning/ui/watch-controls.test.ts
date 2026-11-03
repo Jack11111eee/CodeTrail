@@ -18,6 +18,8 @@ describe("watch controls", () => {
       /<input[^>]*data-testid="settings-watch-toggle"[^>]*disabled/u,
     );
     expect(html).toContain('data-available="false"');
+    // The refresh control needs a real project id to call the watch endpoint.
+    expect(html).toContain('data-project-id="p_0123456789abcdef"');
   });
 
   it("offers a manual refresh beside the toggle", () => {
@@ -53,5 +55,24 @@ describe("watch controls", () => {
     expect(html).toContain("无法保证");
     expect(POLLING_NOTE).toContain("force-push");
     expect(html).toContain(POLLING_NOTE);
+  });
+
+  it("falls back to a generic reason when unavailable without one", () => {
+    const html = renderSettingsPage(
+      pageContext,
+      settingsModel({
+        watch: {
+          enabled: false,
+          available: false,
+          reason: null,
+          lastPollAt: null,
+        },
+      }),
+    );
+    expect(html).toContain("此项目不支持后台轮询");
+    expect(html).toMatch(
+      /<input[^>]*data-testid="settings-watch-toggle"[^>]*disabled/u,
+    );
+    expect(html).toContain("最近轮询：—");
   });
 });

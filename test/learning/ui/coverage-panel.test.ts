@@ -95,4 +95,21 @@ describe("coverage panel", () => {
     expect(html).toContain("覆盖信息不可用");
     expect(html).toContain('data-complete="false"');
   });
+
+  it("treats an empty, incomplete report as unknown, not complete", () => {
+    const html = renderReaderPage(
+      pageContext,
+      readerModel({
+        coverage: coverage({
+          complete: false,
+          analyzed: [],
+          gaps: [],
+          counts: { totalFiles: 0, analyzedFiles: 0, excludedFiles: 0 },
+        }),
+      }),
+    );
+    expect(html).toContain('data-complete="false"');
+    expect(html).toContain("覆盖信息不完整");
+    expect(html).not.toContain("覆盖报告：未记录未分析路径");
+  });
 });

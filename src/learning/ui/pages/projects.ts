@@ -91,7 +91,7 @@ export function renderProjectsPage(
     `method="post" action="/api/projects">` +
     `<h2>添加 GitHub 项目</h2>` +
     `<label>GitHub URL<input name="githubUrl" type="url" required ` +
-    `placeholder="github.com/owner/repo"></label>` +
+    `placeholder="https://github.com/owner/repo"></label>` +
     `<label>分支或提交（可选）<input name="ref" type="text" autocomplete="off"></label>` +
     `<button type="submit">添加 GitHub 项目</button>` +
     `</form>` +

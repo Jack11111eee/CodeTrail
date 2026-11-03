@@ -57,4 +57,15 @@ describe("model scope", () => {
     expect(html).toContain('data-pricing-configured="true"');
     expect(html).toContain("已配置");
   });
+
+  it("renders an empty data-sent manifest without hiding the section", () => {
+    const html = renderSettingsPage(
+      pageContext,
+      settingsModel({
+        model: { ...settingsModel().model, dataSent: [] },
+      }),
+    );
+    expect(html).toContain("尚未配置发送范围");
+    expect(countTestId(html, "settings-model-scope")).toBe(1);
+  });
 });

@@ -106,7 +106,9 @@ export function renderPageShell(
     `<meta name="viewport" content="width=device-width, initial-scale=1">` +
     `<title>${escapeHtml(title)} · Codetrail</title>` +
     `<link rel="stylesheet" href="${escapeAttribute(`${assetBase}/styles.css`)}">` +
-    `<script src="${escapeAttribute(`${assetBase}/client.js`)}" defer></script>` +
+    // `tsconfig.client.json` emits an ES module; a classic script would throw a
+    // SyntaxError on its top-level `export` and never enhance the page.
+    `<script type="module" src="${escapeAttribute(`${assetBase}/client.js`)}" defer></script>` +
     `</head><body data-page="${escapeAttribute(active)}">` +
     `<header class="site-header">` +
     `<a class="brand" href="/">Codetrail</a>${nav(active)}` +

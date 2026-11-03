@@ -74,4 +74,14 @@ describe("terms page", () => {
       expect(countTestId(html, testid), testid).toBe(1);
     }
   });
+
+  it("renders an empty cross-project list for a term without links", () => {
+    const html = renderTermsPage(
+      pageContext,
+      termsModel({ terms: [termView({ links: [] })] }),
+    );
+    expect(html).toContain("尚无跨项目来源");
+    expect(html).toContain("快照");
+    expect(countTestId(html, "term-cross-project")).toBe(1);
+  });
 });

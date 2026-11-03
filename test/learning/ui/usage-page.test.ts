@@ -66,4 +66,33 @@ describe("usage page", () => {
     expect(html).toContain('<tr data-kind="update">');
     expect(html).toContain("<td>0</td>");
   });
+
+  it("shows a dash for a missing cost when pricing is configured", () => {
+    const html = renderSettingsPage(
+      pageContext,
+      settingsModel({
+        model: { ...settingsModel().model, pricingConfigured: true },
+        usage: usageView({
+          groups: [
+            {
+              kind: "initial",
+              inputTokens: 1,
+              outputTokens: 1,
+              calls: 1,
+              costCents: null,
+            },
+          ],
+          totals: {
+            inputTokens: 1,
+            outputTokens: 1,
+            calls: 1,
+            costCents: null,
+            pricingConfigured: true,
+          },
+        }),
+      }),
+    );
+    expect(html).toContain("<td>—</td>");
+    expect(html).not.toContain("仅用量");
+  });
 });

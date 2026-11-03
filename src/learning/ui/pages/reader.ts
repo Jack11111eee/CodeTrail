@@ -361,7 +361,9 @@ function renderCoverage(coverage: CoverageReport | null): string {
   const complete = coverage.complete && coverage.gaps.length === 0;
   const notice = complete
     ? "覆盖报告：未记录未分析路径。"
-    : "覆盖不完整：以下路径未被分析，结论不覆盖整个仓库，绝不声称完整。";
+    : coverage.gaps.length === 0
+      ? "覆盖信息不完整：没有可用的覆盖报告，结论不覆盖整个仓库，绝不声称完整。"
+      : "覆盖不完整：以下路径未被分析，结论不覆盖整个仓库，绝不声称完整。";
 
   return (
     `<section class="panel" data-testid="coverage-gaps" ` +
@@ -433,6 +435,7 @@ function renderQa(model: ReaderPageModel): string {
     `<textarea data-testid="qa-input" id="qa-input" name="text" rows="3" ` +
     `placeholder="针对当前讲解或选中的代码提问"></textarea>` +
     `<input type="hidden" data-qa-selection-source name="selectionSource" value="">` +
+    `<input type="hidden" data-qa-selection-source-ids name="selectionSourceIds" value="">` +
     `<input type="hidden" data-qa-selection-commit name="selectionCommit" value="">` +
     `<button type="submit">发送</button>` +
     `</form>` +

@@ -404,6 +404,7 @@ export function settingsModel(
   overrides: Partial<SettingsPageModel> = {},
 ): SettingsPageModel {
   return {
+    projectId: PROJECT_ID,
     model: {
       provider: "anthropic",
       model: "claude-test",

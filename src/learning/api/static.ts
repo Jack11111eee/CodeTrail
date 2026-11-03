@@ -86,8 +86,28 @@ export interface StaticUiOptions {
   assetBase?: string;
 }
 
+/**
+ * Locates the browser assets. The compiled bundle lives beside the compiled
+ * server (`dist/learning/ui`), which is also the right answer under `tsx` dev:
+ * `src/learning/ui` has only `client.ts`, so serving it would 404 on
+ * `client.js`. Prefer a directory that actually contains the bundle, then fall
+ * back to the sibling path.
+ */
 function defaultAssetDir(): string {
-  return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "ui");
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const built = path.resolve(here, "..", "ui");
+  if (fs.existsSync(path.join(built, "client.js"))) return built;
+  const fromSource = path.resolve(
+    here,
+    "..",
+    "..",
+    "..",
+    "dist",
+    "learning",
+    "ui",
+  );
+  if (fs.existsSync(path.join(fromSource, "client.js"))) return fromSource;
+  return built;
 }
 
 function htmlResponse(html: string): RouteResponse {
@@ -170,7 +190,9 @@ function emptyCoverage(
   return {
     generationId,
     commitSha,
-    complete: true,
+    // A generation without a coverage report is *unknown*, not complete: the
+    // reader must never claim a full-repository analysis it cannot prove.
+    complete: false,
     analyzed: [],
     gaps: [],
     counts: { totalFiles: 0, analyzedFiles: 0, excludedFiles: 0 },
@@ -525,6 +547,7 @@ function buildSettingsModel(
   }
 
   return {
+    projectId: project?.projectId ?? "",
     model: toModelSettingsView(settings),
     usage: toUsageView(deps.repos.usage.groupByKind(), pricingConfigured),
     storage: computeStorageReport(deps.paths, deps.repos),

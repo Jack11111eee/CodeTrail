@@ -56,13 +56,15 @@ function wireProjectForms(): void {
     form.addEventListener("submit", (event) => {
       event.preventDefault();
       const kind = form.getAttribute("data-project-kind");
-      const payload =
-        kind === "local"
-          ? { localPath: valueOf(form, "localPath") }
-          : {
-              githubUrl: valueOf(form, "githubUrl"),
-              ref: valueOf(form, "ref"),
-            };
+      let payload: Record<string, unknown>;
+      if (kind === "local") {
+        payload = { localPath: valueOf(form, "localPath") };
+      } else {
+        payload = { githubUrl: valueOf(form, "githubUrl") };
+        // `ref` is optional on the API; an empty string fails validation.
+        const ref = valueOf(form, "ref");
+        if (ref !== "") payload.ref = ref;
+      }
       void requestJson("/api/projects", "POST", payload).then((result) => {
         if (result.ok) {
           window.location.assign("/");
@@ -160,7 +162,17 @@ function wireDiagramSelection(): void {
   const commitField = document.querySelector<HTMLInputElement>(
     "[data-qa-selection-commit]",
   );
-  if (input === null || sourceField === null || commitField === null) return;
+  const sourceIdsField = document.querySelector<HTMLInputElement>(
+    "[data-qa-selection-source-ids]",
+  );
+  if (
+    input === null ||
+    sourceField === null ||
+    commitField === null ||
+    sourceIdsField === null
+  ) {
+    return;
+  }
 
   const select = (node: Element): void => {
     const sourceIds = (node.getAttribute("data-evidence-ids") ?? "")
@@ -168,6 +180,7 @@ function wireDiagramSelection(): void {
       .map((value) => value.trim())
       .filter((value) => value !== "");
     sourceField.value = sourceIds[0] ?? "";
+    sourceIdsField.value = sourceIds.join(",");
     commitField.value = node.getAttribute("data-commit-sha") ?? "";
     document.querySelectorAll("[data-diagram-node]").forEach((candidate) => {
       candidate.setAttribute("aria-pressed", String(candidate === node));
@@ -205,12 +218,27 @@ function wireQaForm(): void {
     const sourceField = form.querySelector<HTMLInputElement>(
       "[data-qa-selection-source]",
     );
+    const sourceIdsField = form.querySelector<HTMLInputElement>(
+      "[data-qa-selection-source-ids]",
+    );
+    const commitField = form.querySelector<HTMLInputElement>(
+      "[data-qa-selection-commit]",
+    );
     const sourceId = sourceField?.value ?? "";
+    const sourceIds = (sourceIdsField?.value ?? "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter((value) => value !== "");
+    const commitSha = commitField?.value ?? "";
     const body: Record<string, unknown> = { text };
-    // The commit is carried in the hidden field and in the diagram node's
-    // `data-commit-sha`; the request's selection vocabulary is source-based, so
-    // the API resolves the generation's bound commit from the source id.
-    if (sourceId !== "") body.selection = { sourceId };
+    // A diagram click submits the full evidence list and the commit the
+    // generation was analysed at — never the repository's latest head.
+    if (sourceId !== "") {
+      const selection: Record<string, unknown> = { sourceId };
+      if (sourceIds.length > 0) selection.sourceIds = sourceIds;
+      if (commitSha !== "") selection.commitSha = commitSha;
+      body.selection = selection;
+    }
 
     const conversationId = form.getAttribute("data-conversation-id") ?? "";
     const send = (id: string): void => {
@@ -294,22 +322,51 @@ function wireWatchRefresh(): void {
   const button = document.querySelector<HTMLButtonElement>(
     "[data-testid='settings-watch-refresh']",
   );
+  const toggle = document.querySelector<HTMLInputElement>(
+    "[data-testid='settings-watch-toggle']",
+  );
   const panel = document.querySelector<HTMLElement>("[data-watch-panel]");
   if (button === null || panel === null) return;
+
+  const projectIdOf = (): string => panel.getAttribute("data-project-id") ?? "";
+
   button.addEventListener("click", () => {
-    const projectId = panel.getAttribute("data-project-id") ?? "";
+    const projectId = projectIdOf();
     if (projectId === "") {
-      button.textContent = "手动刷新已在后台排队";
+      button.textContent = "请先选择项目";
       return;
     }
+    button.disabled = true;
     void requestJson(
       `/api/projects/${encodeURIComponent(projectId)}/watch`,
       "PUT",
       { enabled: true, refreshNow: true },
     ).then((result) => {
-      button.textContent = result.ok ? "已刷新" : "刷新失败";
+      button.disabled = false;
+      // Only claim the refresh was queued once the API accepted it.
+      button.textContent = result.ok ? "手动刷新已在后台排队" : "刷新失败";
     });
   });
+
+  if (toggle !== null && !toggle.disabled) {
+    toggle.addEventListener("change", () => {
+      const projectId = projectIdOf();
+      if (projectId === "") {
+        toggle.checked = !toggle.checked;
+        return;
+      }
+      void requestJson(
+        `/api/projects/${encodeURIComponent(projectId)}/watch`,
+        "PUT",
+        { enabled: toggle.checked },
+      ).then((result) => {
+        if (!result.ok) {
+          toggle.checked = !toggle.checked;
+          setStatus(panel, "保存失败。");
+        }
+      });
+    });
+  }
 }
 
 function main(): void {

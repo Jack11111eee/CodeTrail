@@ -87,4 +87,35 @@ describe("update inbox", () => {
     expect(html).toContain('data-gap-count="0"');
     expect(countTestId(html, "inbox-list")).toBe(1);
   });
+
+  it("omits the commit details when no sha was recorded", () => {
+    const html = renderInboxPage(
+      pageContext,
+      inboxModel({
+        items: [changeSummary({ headSha: null, baseSha: null })],
+      }),
+    );
+    expect(html).not.toContain("原提交");
+    expect(html).toContain("完整记录");
+    expect(countTestId(html, "inbox-item")).toBe(1);
+  });
+
+  it("counts every gap in the badge", () => {
+    const html = renderInboxPage(
+      pageContext,
+      inboxModel({
+        items: [
+          changeSummary({ hasGap: true, state: "gap" }),
+          changeSummary({
+            changeId: "e_second" as never,
+            hasGap: true,
+            state: "gap",
+          }),
+          changeSummary({ changeId: "e_third" as never, hasGap: false }),
+        ],
+      }),
+    );
+    expect(html).toContain('data-gap-count="2"');
+    expect(html).toContain("缺口 2");
+  });
 });

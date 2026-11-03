@@ -66,6 +66,8 @@ describe("projects page", () => {
     expect(html).toContain('data-project-kind="github"');
     expect(html).toContain('name="githubUrl"');
     expect(html).toContain('name="ref"');
+    // The placeholder shows the scheme the API actually accepts.
+    expect(html).toContain('placeholder="https://github.com/owner/repo"');
     expect(html).toContain("查看移除依赖");
   });
 
@@ -74,9 +76,20 @@ describe("projects page", () => {
     expect(html).not.toContain("<script>");
     expect(html).not.toMatch(/<script(?![^>]*\bsrc=)/u);
     expect(html).not.toContain("cdn.");
-    expect(html).not.toMatch(/https?:\/\//u);
+    // The only URL in the page is the form placeholder; assets stay relative.
+    expect(html).not.toMatch(/(?:href|src)="https?:\/\//u);
     expect(html).toContain('href="/assets/styles.css"');
     expect(html).toContain('src="/assets/client.js"');
+  });
+
+  it("loads the enhancement bundle as an ES module", () => {
+    const html = renderProjectsPage(pageContext, projectsModel());
+    expect(html).toContain(
+      '<script type="module" src="/assets/client.js" defer></script>',
+    );
+    expect(html).not.toMatch(
+      /<script(?![^>]*\btype="module")[^>]*\bsrc="[^"]*client\.js"/u,
+    );
   });
 
   it("renders an empty state without losing the testids", () => {
@@ -88,11 +101,32 @@ describe("projects page", () => {
     expect(html).toContain("未配置");
     expect(countTestId(html, "project-list")).toBe(1);
   });
+
+  it("renders missing branch, commit, timestamp and job state as placeholders", () => {
+    const html = renderProjectsPage(
+      pageContext,
+      projectsModel({
+        projects: [
+          projectSummary({
+            defaultBranch: null,
+            analyzedCommitSha: null,
+            lastSuccessAt: null,
+            latestJobState: null,
+          }),
+        ],
+      }),
+    );
+    expect(html).toContain("<td>—</td>");
+    expect(html).toContain("<code>—</code>");
+    expect(countTestId(html, "project-status")).toBe(1);
+  });
 });
 
 describe("static-UI seam through a real listener", () => {
   it("declares exactly the documented UI route table", () => {
-    expect(UI_ROUTES.map((route) => `${route.method} ${route.pattern}`)).toEqual([
+    expect(
+      UI_ROUTES.map((route) => `${route.method} ${route.pattern}`),
+    ).toEqual([
       "GET /",
       "GET /learn",
       "GET /learn/reader",
@@ -148,5 +182,25 @@ describe("static-UI seam through a real listener", () => {
     expect(styles.status).toBe(200);
     expect(styles.headers["content-type"]).toContain("text/css");
     expect(styles.text).toContain("@media (max-width: 900px)");
+  });
+
+  it("serves the compiled enhancement bundle as JavaScript", async () => {
+    const response = await httpRequest(server!.port, {
+      path: "/assets/client.js",
+      headers: { ...server!.cookie },
+    });
+    expect(response.status).toBe(200);
+    expect(response.headers["content-type"]).toContain("text/javascript");
+    expect(response.text.length).toBeGreaterThan(0);
+  });
+
+  it("does not claim complete coverage for a generation without a report", async () => {
+    const response = await httpRequest(server!.port, {
+      path: "/learn/reader",
+      headers: { ...server!.cookie },
+    });
+    expect(response.status).toBe(200);
+    expect(response.text).toContain('data-complete="false"');
+    expect(response.text).not.toContain("覆盖报告：未记录未分析路径");
   });
 });

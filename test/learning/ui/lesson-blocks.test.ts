@@ -91,4 +91,22 @@ describe("lesson blocks", () => {
       expect(countTestId(html, testid), testid).toBe(1);
     }
   });
+
+  it("states why choices were omitted and still collapses alternatives", () => {
+    const lesson = researchLesson({
+      choices: [],
+      choicesOmittedReason: "该模块没有可对比的替代方案",
+    });
+    const html = renderReaderPage(
+      pageContext,
+      readerModel({
+        activeLesson: lessonDetail("component", { lesson }),
+      }),
+    );
+    expect(html).toContain("该模块没有可对比的替代方案");
+    expect(html).toContain(
+      '<details data-collapsed="true" data-block="alternatives">',
+    );
+    expect(countTestId(html, "lesson-choices")).toBe(1);
+  });
 });

@@ -142,7 +142,8 @@ function watchPanel(model: SettingsPageModel): string {
       : ` title="${escapeAttribute(reason)}" aria-describedby="watch-reason"`;
   return (
     `<section class="panel watch-panel" data-watch-panel="true" ` +
-    `data-project-id="" data-available="${watch.available ? "true" : "false"}" ` +
+    `data-project-id="${escapeAttribute(model.projectId)}" ` +
+    `data-available="${watch.available ? "true" : "false"}" ` +
     `data-enabled="${watch.enabled ? "true" : "false"}">` +
     `<h2>跟进</h2>` +
     `<label class="watch-label"><input type="checkbox" ` +
