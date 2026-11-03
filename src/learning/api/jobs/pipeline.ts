@@ -349,6 +349,33 @@ function usageKindFor(job: JobRecord): UsageKind {
   }
 }
 
+/**
+ * Job-level quota pre-flight (§20, AC-GEN-20).
+ *
+ * The per-call gate in `instrumentChat` is the real limit, but an agent-driven
+ * run reaches the model through the upstream graph, which rewraps the thrown
+ * `LearningError` into a generic error and loses its code. Checking once before
+ * the job dispatches anything keeps an exhausted budget a distinct
+ * `budget_exhausted` failure instead of a generic `internal_error`.
+ */
+function assertBudgetAvailable(
+  deps: JobRunnerDeps,
+  model: ModelHandle,
+  kind: UsageKind,
+  role: ModelRole,
+): void {
+  const estimate = model.estimate(role, 1_000);
+  const allowed = deps.usage.canSpend({
+    kind,
+    estimatedCalls: 1,
+    estimatedInputTokens: estimate.tokens,
+    estimatedOutputTokens: model.settings.maxOutputTokens,
+  });
+  if (!allowed) {
+    throw new LearningError("budget_exhausted", "模型配额已用尽", { kind });
+  }
+}
+
 // ── filesystem helpers ──────────────────────────────────────────────────────
 
 async function exists(candidate: string): Promise<boolean> {
@@ -734,6 +761,9 @@ async function runGeneration(
     return { generationId: cached.generationId };
   }
 
+  const usageKind = usageKindFor(job);
+  assertBudgetAvailable(deps, model, usageKind, "repo_job");
+
   await prepareBuildTree(deps, job, sha, snapshot);
   checkAborted(signal);
   const workspace = deps.publisher.buildWorkspace(job.jobId);
@@ -773,7 +803,6 @@ async function runGeneration(
   }
   checkAborted(signal);
 
-  const usageKind = usageKindFor(job);
   const metered = meteredHandle(model, {
     kind: usageKind,
     jobId: job.jobId,
@@ -895,6 +924,9 @@ async function runComparison(
     return { generationId: cached.generationId };
   }
 
+  const usageKind = usageKindFor(job);
+  assertBudgetAvailable(deps, model, usageKind, "lesson");
+
   const workspace = deps.publisher.buildWorkspace(job.jobId);
   await removeBuildWorktree(deps.paths, job.jobId).catch(() => undefined);
   await mkdir(workspace.stagingDir, { recursive: true, mode: 0o700 });
@@ -910,7 +942,6 @@ async function runComparison(
   );
   await writeCoverage(workspace.knowledgeDir, coverage);
 
-  const usageKind = usageKindFor(job);
   const metered = meteredHandle(model, {
     kind: usageKind,
     jobId: job.jobId,
@@ -1032,6 +1063,9 @@ async function runChange(input: ExecuteJobInput): Promise<ExecuteJobResult> {
   );
   const generationId = generationIdFromCacheKey(cacheKey);
 
+  const usageKind = usageKindFor(job);
+  assertBudgetAvailable(deps, model, usageKind, "change");
+
   const workspace = deps.publisher.buildWorkspace(job.jobId);
   await removeBuildWorktree(deps.paths, job.jobId).catch(() => undefined);
   await mkdir(workspace.stagingDir, { recursive: true, mode: 0o700 });
@@ -1048,7 +1082,7 @@ async function runChange(input: ExecuteJobInput): Promise<ExecuteJobResult> {
   await writeCoverage(workspace.knowledgeDir, coverage);
 
   const metered = meteredHandle(model, {
-    kind: "change",
+    kind: usageKind,
     jobId: job.jobId,
     role: "change",
     signal,
