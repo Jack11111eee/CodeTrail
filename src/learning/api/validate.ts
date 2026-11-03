@@ -223,8 +223,10 @@ const deleteProjectQuery = z
 const messageListQuery = z
   .object({ limit: limitString.optional(), before: nonEmptyString.optional() })
   .strict();
+// An empty cursor means "first page"; the handler maps it to `null` and lets
+// `ChangesRepo.page` validate anything else (`cursor_invalid`).
 const changesListQuery = z
-  .object({ cursor: nonEmptyString.optional(), limit: limitString.optional() })
+  .object({ cursor: z.string().optional(), limit: limitString.optional() })
   .strict();
 const termsListQuery = z.object({ q: z.string().optional() }).strict();
 const usageQuery = z
