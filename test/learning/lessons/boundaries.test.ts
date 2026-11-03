@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import { validateStructural } from "../../../src/learning/lessons/validate/structural.ts";
-import { externalRef, researchFixture } from "../helpers/lesson-context.ts";
+import {
+  externalRef,
+  repoRef,
+  researchFixture,
+} from "../helpers/lesson-context.ts";
 
 /**
  * AC-LES-05: the four boundary statuses, `implemented` backed by a repo source
@@ -127,6 +131,85 @@ describe("boundaries", () => {
         evidenceIds: [],
       },
     ];
+
+    expect(validateStructural(valid, ctx).ok).toBe(true);
+  });
+
+  it("rejects an implemented boundary backed only by a repository-hosted design note", () => {
+    const { lesson, ctx, registry } = researchFixture();
+    const design = repoRef({
+      path: "docs/design/future_upload.md",
+      text: "Status: planned, not implemented.",
+      commitSha: ctx.generation.commitSha,
+      generationId: ctx.generation.generationId,
+      repoId: ctx.generation.repoId,
+    });
+    registry.add(ctx.generation.generationId, design);
+
+    const broken = structuredClone(lesson);
+    broken.boundaries = [
+      {
+        item: "PDF 上传",
+        status: "implemented",
+        limits: "设计文档说还没实现",
+        evidenceIds: [design.sourceId],
+      },
+    ];
+    broken.evidence = [design.sourceId];
+
+    const result = validateStructural(broken, ctx);
+
+    expect(result.ok).toBe(false);
+    expect(result.issues[0]?.code).toBe("boundaries");
+    expect(result.issues[0]?.message).toContain("downgrade");
+  });
+
+  it("accepts an implemented boundary when a repo design note accompanies repo code", () => {
+    const { lesson, ctx, registry } = researchFixture();
+    const design = repoRef({
+      path: "docs/decisions/decision-log.md",
+      text: "D-001: the upload path was approved.",
+      commitSha: ctx.generation.commitSha,
+      generationId: ctx.generation.generationId,
+      repoId: ctx.generation.repoId,
+    });
+    registry.add(ctx.generation.generationId, design);
+
+    const valid = structuredClone(lesson);
+    valid.boundaries = [
+      {
+        item: "PDF 上传",
+        status: "implemented",
+        limits: "代码与决策记录都存在",
+        evidenceIds: [design.sourceId, valid.evidence[0]],
+      },
+    ];
+    valid.evidence = [...valid.evidence, design.sourceId];
+
+    expect(validateStructural(valid, ctx).ok).toBe(true);
+  });
+
+  it("accepts a planned boundary backed by a repository-hosted design note", () => {
+    const { lesson, ctx, registry } = researchFixture();
+    const design = repoRef({
+      path: "docs/design/future_upload.md",
+      text: "Status: planned, not implemented.",
+      commitSha: ctx.generation.commitSha,
+      generationId: ctx.generation.generationId,
+      repoId: ctx.generation.repoId,
+    });
+    registry.add(ctx.generation.generationId, design);
+
+    const valid = structuredClone(lesson);
+    valid.boundaries = [
+      {
+        item: "PDF 上传",
+        status: "planned",
+        limits: "设计文档说还没实现",
+        evidenceIds: [design.sourceId],
+      },
+    ];
+    valid.evidence = [design.sourceId];
 
     expect(validateStructural(valid, ctx).ok).toBe(true);
   });

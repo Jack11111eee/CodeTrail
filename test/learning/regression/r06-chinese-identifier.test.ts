@@ -122,4 +122,15 @@ describe("AC-R06-01 — Chinese and identifier questions", () => {
     ).toBe(false);
     expect(hits).toEqual([]);
   });
+
+  it("treats an empty or whitespace-only question as no query", async () => {
+    for (const empty of ["", "   ", "\n\t  "]) {
+      expect(expandQuery(empty)).toEqual({
+        original: empty,
+        terms: [],
+        symbolPreserved: [],
+      });
+      await expect(search(empty)).resolves.toEqual([]);
+    }
+  });
 });

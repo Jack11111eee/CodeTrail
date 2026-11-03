@@ -408,4 +408,109 @@ describe("AC-R17-02 — background and reading position are independent", () => 
       await server.close();
     }
   }, 120_000);
+
+  it("keeps both stores independent for one payload and upserts the reading position", async () => {
+    const server = await startRoutesHarness({ extraModules: [prefsModule] });
+    const harness = await startHarness({ baseUrl: server.url });
+    try {
+      const combined = await harness.request("/api/preferences", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          explainLevel: "plain_first",
+          background: "熟悉 Python，不熟悉 Rust。",
+          readingPosition: {
+            generationId: "g_reader_2",
+            lessonId: "l_reader_2",
+            offset: 5,
+          },
+        }),
+      });
+      expect(combined.status).toBe(200);
+
+      // One request, two stores: each field landed in its own table.
+      expect(
+        server.db.raw
+          .prepare("SELECT key, value FROM learner_preferences ORDER BY key")
+          .all(),
+      ).toEqual([
+        {
+          key: "background",
+          value: JSON.stringify("熟悉 Python，不熟悉 Rust。"),
+        },
+        { key: "explain_level", value: JSON.stringify("plain_first") },
+      ]);
+      expect(
+        server.db.raw
+          .prepare(
+            "SELECT generation_id, lesson_id, offset FROM reading_positions",
+          )
+          .all(),
+      ).toEqual([
+        { generation_id: "g_reader_2", lesson_id: "l_reader_2", offset: 5 },
+      ]);
+
+      // The same reader position moves by upsert; it does not accumulate rows.
+      const moved = await harness.request("/api/preferences", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          readingPosition: {
+            generationId: "g_reader_2",
+            lessonId: "l_reader_2",
+            offset: 88,
+          },
+        }),
+      });
+      expect(moved.status).toBe(200);
+      expect(
+        server.db.raw
+          .prepare(
+            "SELECT generation_id, lesson_id, offset FROM reading_positions",
+          )
+          .all(),
+      ).toEqual([
+        { generation_id: "g_reader_2", lesson_id: "l_reader_2", offset: 88 },
+      ]);
+      // Moving the reading position did not rewrite the learner preferences.
+      expect(
+        server.db.raw
+          .prepare("SELECT COUNT(*) AS count FROM learner_preferences")
+          .get(),
+      ).toEqual({ count: 2 });
+    } finally {
+      await harness.close();
+      await server.close();
+    }
+  }, 120_000);
+
+  it("rejects a malformed body without writing either table", async () => {
+    const server = await startRoutesHarness({ extraModules: [prefsModule] });
+    const harness = await startHarness({ baseUrl: server.url });
+    try {
+      const response = await harness.request("/api/preferences", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify([{ background: "not an object" }]),
+      });
+
+      expect(response.status).toBe(400);
+      expect(
+        (response.json as { error?: { code?: string } }).error?.code,
+      ).toBe("invalid_input");
+      expect(
+        server.db.raw
+          .prepare("SELECT COUNT(*) AS count FROM learner_preferences")
+          .get(),
+      ).toEqual({ count: 0 });
+      expect(
+        server.db.raw
+          .prepare("SELECT COUNT(*) AS count FROM reading_positions")
+          .get(),
+      ).toEqual({ count: 0 });
+    } finally {
+      await harness.close();
+      await server.close();
+    }
+  }, 120_000);
 });

@@ -54,6 +54,7 @@ import {
 const REPO_ROOT = fileURLToPath(new URL("../../..", import.meta.url));
 const FIXTURE = "evolution";
 const CHECKOUT = "src/checkout.ts";
+const README = "README.md";
 const REPO_ID = "r_r16_samelines01" as RepoId;
 const GENERATION_ID = "g_r16_samelines01" as GenerationId;
 
@@ -352,4 +353,130 @@ describe("AC-R16-01 — same lines, distinct versions", () => {
       }
     }
   }, 120_000);
+
+  it("keeps two refs when both commits hold byte-identical content at one path", async () => {
+    const baseSha = fixtureSha(FIXTURE, "HEAD~1");
+    const headSha = fixtureSha(FIXTURE, "HEAD");
+    const baseText = readAt(baseSha, README);
+    const headText = readAt(headSha, README);
+    // The rename commit leaves README untouched: same bytes, same path.
+    expect(headText).toBe(baseText);
+
+    const generation = defaultGeneration();
+    const registry = fakeRegistry();
+    const baseRef = repoRef({
+      path: README,
+      text: baseText,
+      lines: null,
+      commitSha: BASE_SHA,
+      generationId: generation.generationId,
+      repoId: generation.repoId,
+    });
+    const headRef = repoRef({
+      path: README,
+      text: headText,
+      lines: null,
+      commitSha: HEAD_SHA,
+      generationId: generation.generationId,
+      repoId: generation.repoId,
+    });
+    registry.add(generation.generationId, baseRef);
+    registry.add(generation.generationId, headRef);
+
+    // Identity cannot come from the content hash here — only the commit can
+    // tell the two sides apart.
+    expect(baseRef.contentHash).toBe(headRef.contentHash);
+    expect(baseRef.sourceId).not.toBe(headRef.sourceId);
+    expect(repoSourceId(README, baseSha, null)).not.toBe(
+      repoSourceId(README, headSha, null),
+    );
+
+    const raw = structuredClone(comparisonLesson());
+    raw.context = {
+      repoId: generation.repoId,
+      commitSha: HEAD_SHA,
+      generationId: generation.generationId,
+      scenarioId: "sc_identical_bytes",
+      moduleIds: ["src"],
+      comparison: {
+        base: {
+          repoId: generation.repoId,
+          commitSha: BASE_SHA,
+          generationId: "g_r16_base00000001",
+        },
+        head: {
+          repoId: generation.repoId,
+          commitSha: HEAD_SHA,
+          generationId: generation.generationId,
+        },
+      },
+    };
+    raw.statements = [
+      {
+        id: "st_head",
+        label: "code_fact",
+        text: "B 版本的 README 与 A 版本内容相同。",
+        evidenceIds: [headRef.sourceId],
+        side: "head",
+      },
+      {
+        id: "st_base",
+        label: "code_fact",
+        text: "A 版本的 README 与 B 版本内容相同。",
+        evidenceIds: [baseRef.sourceId],
+        side: "base",
+      },
+    ];
+    raw.evidence = [headRef.sourceId, baseRef.sourceId];
+    raw.choices = [];
+    raw.choicesOmittedReason = "两版本内容相同，没有可比较的替代设计";
+    raw.boundaries = [];
+    raw.diagram = {
+      kind: "state",
+      mermaid: "stateDiagram-v2\n  [*] --> readme",
+      nodes: [
+        {
+          id: "n1",
+          label: "README (A)",
+          evidenceIds: [baseRef.sourceId],
+          status: "observed",
+        },
+        {
+          id: "n2",
+          label: "README (B)",
+          evidenceIds: [headRef.sourceId],
+          status: "observed",
+        },
+      ],
+      edges: [],
+    };
+    const parsed = parseLesson(raw);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+
+    const ctx = makeContext({
+      mode: "comparison",
+      generation,
+      registry,
+      snapshot: fakeSnapshot(
+        { [README]: headText },
+        { commitSha: HEAD_SHA, repoId: generation.repoId },
+      ),
+      baseSnapshot: fakeSnapshot(
+        { [README]: baseText },
+        { commitSha: BASE_SHA, repoId: generation.repoId },
+      ),
+      allowedCommitShas: [HEAD_SHA, BASE_SHA],
+      coverage: emptyCoverage([README]),
+    });
+
+    await expect(validateEvidence(parsed.lesson, ctx)).resolves.toMatchObject({
+      ok: true,
+    });
+    expect(
+      registry
+        .all(generation.generationId)
+        .filter((ref) => ref.kind === "repo" && ref.path === README),
+    ).toHaveLength(2);
+  });
 });
