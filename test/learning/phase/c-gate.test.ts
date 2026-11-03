@@ -37,7 +37,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { afterEach, beforeAll, describe, expect, test } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "vitest";
 
 import { createSessionStore } from "../../../src/learning/api/auth.ts";
 import {
@@ -46,9 +46,7 @@ import {
 } from "../../../src/learning/api/jobs/pipeline.ts";
 import { createPublisher } from "../../../src/learning/api/jobs/publish.ts";
 import { createUsageMeter } from "../../../src/learning/api/jobs/usage.ts";
-import {
-  registerRouteModule,
-} from "../../../src/learning/api/router.ts";
+import { registerRouteModule } from "../../../src/learning/api/router.ts";
 import { changesModule } from "../../../src/learning/api/routes/changes.ts";
 import { createLearningServer } from "../../../src/learning/api/server.ts";
 import {
@@ -162,8 +160,9 @@ interface RemoteRepo {
 const NULL_DEVICE = process.platform === "win32" ? "NUL" : "/dev/null";
 
 function scriptEnv(tick: number): NodeJS.ProcessEnv {
-  const date = new Date(Date.UTC(2024, 4, 1, 0, 0, 0) + tick * 60_000)
-    .toISOString();
+  const date = new Date(
+    Date.UTC(2024, 4, 1, 0, 0, 0) + tick * 60_000,
+  ).toISOString();
   return {
     ...process.env,
     TZ: "UTC",
@@ -186,7 +185,9 @@ function scriptEnv(tick: number): NodeJS.ProcessEnv {
  * `fetchMirror`; the clone itself is only the script's authoring surface.
  */
 function createRemote(fixtureUrl: string): RemoteRepo {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "codetrail-c-gate-remote-"));
+  const dir = fs.mkdtempSync(
+    path.join(os.tmpdir(), "codetrail-c-gate-remote-"),
+  );
   fs.rmSync(dir, { recursive: true, force: true });
   execFileSync("git", ["clone", "--quiet", fixtureUrl, dir], {
     env: scriptEnv(0),
@@ -592,9 +593,7 @@ async function createGate(options: GateOptions = {}): Promise<Gate> {
       return repos.jobs.listByProject(PROJECT_ID, [...ALL_JOB_STATES]);
     },
     changeJobs() {
-      return gate
-        .jobs()
-        .filter((job) => job.kind === "change_analysis");
+      return gate.jobs().filter((job) => job.kind === "change_analysis");
     },
     cursor(streamId, kind = "discovery") {
       return repos.cursors.get(repoId, streamId, kind);
@@ -625,6 +624,9 @@ async function createGate(options: GateOptions = {}): Promise<Gate> {
       }
     },
     async runPending(runOptions = {}) {
+      // A store regression that refuses the queued→running transition must fail
+      // the test loudly instead of spinning until the per-test timeout.
+      let stuck = 0;
       for (;;) {
         const queued = repos.jobs
           .listByProject(PROJECT_ID, ["queued"])
@@ -649,7 +651,16 @@ async function createGate(options: GateOptions = {}): Promise<Gate> {
             finishedAt: null,
           },
         );
-        if (!started) continue;
+        if (!started) {
+          stuck += 1;
+          if (stuck > 100) {
+            throw new Error(
+              `job ${job.jobId} stayed queued after ${stuck} transition attempts`,
+            );
+          }
+          continue;
+        }
+        stuck = 0;
         repos.attempts.open(job.jobId, 1, at);
         const current = repos.jobs.byId(job.jobId);
         if (current === null) continue;
@@ -777,7 +788,9 @@ beforeAll(() => {
 
 function expectNoDuplicateEvents(gate: Gate): void {
   const events = gate.events();
-  expect(new Set(events.map((event) => event.eventId)).size).toBe(events.length);
+  expect(new Set(events.map((event) => event.eventId)).size).toBe(
+    events.length,
+  );
   expect(new Set(events.map((event) => event.eventKey)).size).toBe(
     events.length,
   );
@@ -837,6 +850,26 @@ function expectMirrorContains(gate: Gate, sha: string): void {
       stdio: "ignore",
     }),
   ).not.toThrow();
+}
+
+/**
+ * A failed analysis must never let publication advance past the event that
+ * failed. Every production pipeline path currently writes
+ * `publishedCursor: null` (pipeline.ts), so a cursor is usually absent; the
+ * contract is conditional on purpose — if one exists it must still stop short
+ * of the blocked heads rather than the test asserting `null` (which would pass
+ * vacuously and break the day the cursor is implemented).
+ */
+function expectPublishedNotPast(
+  gate: Gate,
+  streamId: string,
+  blockedHeads: string[],
+): void {
+  const cursor = gate.cursor(streamId, "published");
+  if (cursor === null) return;
+  for (const head of blockedHeads) {
+    expect(cursor.headSha, `published cursor jumped to ${head}`).not.toBe(head);
+  }
 }
 
 function pullAt(
@@ -982,7 +1015,9 @@ describe("phase C — every observable change is recorded once", () => {
     expect(
       gate
         .events()
-        .some((event) => event.kind === "baseline" && event.headSha === commitThree),
+        .some(
+          (event) => event.kind === "baseline" && event.headSha === commitThree,
+        ),
     ).toBe(true);
     // The commit that arrived with the rename is not replayed as a commit.
     expect(
@@ -992,9 +1027,9 @@ describe("phase C — every observable change is recorded once", () => {
           (event) => event.headSha === commitThree && event.kind === "commit",
         ),
     ).toBe(false);
-    expect(gate.events().filter((event) => event.kind === "commit")).toHaveLength(
-      2,
-    );
+    expect(
+      gate.events().filter((event) => event.kind === "commit"),
+    ).toHaveLength(2);
     expect(gate.cursor(DEFAULT_BRANCH_STREAM)).toMatchObject({
       headSha: commitThree,
       branch: "trunk",
@@ -1034,7 +1069,9 @@ describe("phase C — the pull-request stream", () => {
     gate.remote.checkout("main");
 
     gate.clock.advance(TICK_MS);
-    gate.setPulls([pullAt(gate, { number: 42, headSha: headOne, baseHeadSha: base })]);
+    gate.setPulls([
+      pullAt(gate, { number: 42, headSha: headOne, baseHeadSha: base }),
+    ]);
     await gate.sync();
     await gate.tick();
     events += 1;
@@ -1071,7 +1108,9 @@ describe("phase C — the pull-request stream", () => {
     const headTwo = gate.remote.commit("feat: pr preview two");
     gate.remote.checkout("main");
     gate.clock.advance(TICK_MS);
-    gate.setPulls([pullAt(gate, { number: 42, headSha: headTwo, baseHeadSha: base })]);
+    gate.setPulls([
+      pullAt(gate, { number: 42, headSha: headTwo, baseHeadSha: base }),
+    ]);
     await gate.sync();
     await gate.tick();
     events += 1;
@@ -1121,7 +1160,8 @@ describe("phase C — the pull-request stream", () => {
       (event) => event.baseContextSha === advancedBase,
     )!;
     const earlierPrEvent = prEvents().find(
-      (event) => event.headSha === headTwo && event.baseContextSha === mergeBase,
+      (event) =>
+        event.headSha === headTwo && event.baseContextSha === mergeBase,
     )!;
     expect(baseChangeEvent).toMatchObject({
       headSha: headTwo,
@@ -1131,9 +1171,9 @@ describe("phase C — the pull-request stream", () => {
     });
     expect(earlierPrEvent).toBeDefined();
     expect(baseChangeEvent.jobId).not.toBe(earlierPrEvent.jobId);
-    expect(
-      gate.repos.jobs.byId(baseChangeEvent.jobId!)!.dedupeKey,
-    ).not.toBe(gate.repos.jobs.byId(earlierPrEvent.jobId!)!.dedupeKey);
+    expect(gate.repos.jobs.byId(baseChangeEvent.jobId!)!.dedupeKey).not.toBe(
+      gate.repos.jobs.byId(earlierPrEvent.jobId!)!.dedupeKey,
+    );
     expect(prEvents()).toHaveLength(3);
 
     // Preview separation: distinct head and base records, and the preview
@@ -1222,10 +1262,6 @@ describe("phase C — failure isolation", () => {
       "published",
     );
 
-    const publishedBefore = {
-      defaultBranch: gate.cursor(DEFAULT_BRANCH_STREAM, "published"),
-      pullRequest: gate.cursor(PULL_REQUEST_DISCOVERY_STREAM, "published"),
-    };
     const eventsBefore = gate.events().length;
     const jobsBefore = gate.changeJobs().length;
 
@@ -1265,13 +1301,12 @@ describe("phase C — failure isolation", () => {
       .find((event) => event.headSha === successorSha)!;
     expect(successor).toMatchObject({ state: "waiting", jobId: null });
 
-    // The published cursor never advances on failure (for either stream).
-    expect(gate.cursor(DEFAULT_BRANCH_STREAM, "published")).toEqual(
-      publishedBefore.defaultBranch,
-    );
-    expect(gate.cursor(PULL_REQUEST_DISCOVERY_STREAM, "published")).toEqual(
-      publishedBefore.pullRequest,
-    );
+    // The published cursor never advances past the event that failed, nor past
+    // its waiting successor, on the blocked stream.
+    expectPublishedNotPast(gate, DEFAULT_BRANCH_STREAM, [
+      brokenSha,
+      successorSha,
+    ]);
 
     // The other stream is not blocked: the PR event published.
     const prEvent = gate
@@ -1282,6 +1317,10 @@ describe("phase C — failure isolation", () => {
     expect(
       gate.repos.jobs.byId(prEvent.jobId!)?.outputGenerationId,
     ).not.toBeNull();
+    // A published cursor, when one exists, has moved to that PR head instead of
+    // being parked behind the other stream's failure.
+    const prPublished = gate.cursor(PULL_REQUEST_DISCOVERY_STREAM, "published");
+    if (prPublished !== null) expect(prPublished.headSha).toBe(prHead);
 
     // Discovery still advanced past the failed event, so a restart resumes
     // without re-discovering it.
@@ -1315,10 +1354,12 @@ describe("phase C — restart", () => {
     expect(eventsBefore).toBe(2);
     expect(jobsBefore).toBe(1);
     expect(generationsBefore).toBe(1);
-    const eventIdsBefore = first.events()
+    const eventIdsBefore = first
+      .events()
       .map((event) => event.eventId)
       .sort();
-    const jobIdsBefore = first.changeJobs()
+    const jobIdsBefore = first
+      .changeJobs()
       .map((job) => job.jobId)
       .sort();
 
@@ -1332,12 +1373,18 @@ describe("phase C — restart", () => {
     expect(quiet.enqueued).toBe(0);
     expect(restarted.events()).toHaveLength(eventsBefore);
     expect(restarted.changeJobs()).toHaveLength(jobsBefore);
-    expect(restarted.events().map((event) => event.eventId).sort()).toEqual(
-      eventIdsBefore,
-    );
-    expect(restarted.changeJobs().map((job) => job.jobId).sort()).toEqual(
-      jobIdsBefore,
-    );
+    expect(
+      restarted
+        .events()
+        .map((event) => event.eventId)
+        .sort(),
+    ).toEqual(eventIdsBefore);
+    expect(
+      restarted
+        .changeJobs()
+        .map((job) => job.jobId)
+        .sort(),
+    ).toEqual(jobIdsBefore);
     expect(
       restarted.repos.generations.listByProject(restarted.projectId),
     ).toHaveLength(generationsBefore);
@@ -1429,21 +1476,92 @@ function runScriptModule(expression: string): unknown {
   return JSON.parse(String(result.stdout)) as unknown;
 }
 
-describe.skipIf(INSIDE_PHASE_CHECK)("phase-check C stage", () => {
-  test("C is registered after B with its own gate test and the updates suite", () => {
-    const seam = runScriptModule(
-      "({ phases: phaseCheck.STAGES.map((stage) => stage.phase), testFiles: phaseCheck.STAGES.map((stage) => stage.testFile), suites: phaseCheck.STAGES.map((stage) => stage.suites.map((suite) => suite.name)) })",
-    ) as { phases: string[]; testFiles: string[]; suites: string[][] };
+interface StageSeam {
+  phase: string;
+  testFile: string;
+  suites: {
+    name: string;
+    kind: string;
+    paths: string[];
+    script: string | null;
+  }[];
+}
 
-    expect(seam.phases.slice(0, 3)).toEqual(["A", "B", "C"]);
-    expect(seam.testFiles[2]).toBe("test/learning/phase/c-gate.test.ts");
-    expect(seam.suites[2]).toContain("c-gate");
-    expect(seam.suites[2]).toContain("updates");
+/** The registry as data, read in a short-lived child (the script is ESM). */
+function readStageSeam(): StageSeam[] {
+  return runScriptModule(
+    "phaseCheck.STAGES.map((stage) => ({ phase: stage.phase, testFile: stage.testFile, suites: stage.suites.map((suite) => ({ name: suite.name, kind: suite.kind, paths: (suite.paths ?? []).map(String), script: typeof suite.script === 'string' ? suite.script : null })) }))",
+  ) as StageSeam[];
+}
+
+/**
+ * A throwaway tree that satisfies `phase-check`'s preflight without running a
+ * single real suite: every `kind:"script"` entry is a no-op, and every vitest
+ * suite is bridged through a stubbed `scripts/with-node.mjs` that exits 0
+ * before it can touch the real runner.
+ *
+ * `--root <dir>` therefore exercises the real registry, ordering, simulation
+ * and exit-code logic in milliseconds — which is all this block is about —
+ * instead of re-running the whole A→B chain inside a unit test. That chain is
+ * already the acceptance command (`pnpm run phase:check --through=C`) and the
+ * b-gate pattern's job.
+ */
+function createPhaseCheckRoot(stages: StageSeam[]): string {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codetrail-phase-root-"));
+  const write = (relative: string, content: string): void => {
+    const absolute = path.join(root, relative);
+    fs.mkdirSync(path.dirname(absolute), { recursive: true });
+    fs.writeFileSync(absolute, content, "utf8");
+  };
+  write("scripts/with-node.mjs", "process.exit(0);\n");
+  for (const stage of stages) {
+    write(stage.testFile, "export {};\n");
+    for (const suite of stage.suites) {
+      if (suite.kind === "script") {
+        write(suite.script!, "process.exit(0);\n");
+        continue;
+      }
+      for (const relative of suite.paths) {
+        write(
+          relative.endsWith(".test.ts")
+            ? relative
+            : path.join(relative, "stub.test.ts"),
+          "export {};\n",
+        );
+      }
+    }
+  }
+  return root;
+}
+
+describe.skipIf(INSIDE_PHASE_CHECK)("phase-check C stage", () => {
+  let seam: StageSeam[];
+  let root: string;
+
+  beforeAll(() => {
+    seam = readStageSeam();
+    root = createPhaseCheckRoot(seam);
+  }, 60_000);
+
+  afterAll(() => {
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  test("C is registered after B with its own gate test and the updates suite", () => {
+    expect(seam.map((stage) => stage.phase).slice(0, 3)).toEqual([
+      "A",
+      "B",
+      "C",
+    ]);
+    expect(seam[2].testFile).toBe("test/learning/phase/c-gate.test.ts");
+    const cSuites = seam[2].suites.map((suite) => suite.name);
+    expect(cSuites).toContain("c-gate");
+    expect(cSuites).toContain("updates");
     // C never rewrites A's or B's entries.
-    expect(seam.testFiles[0]).toBe("test/learning/phase/a-gate.test.ts");
-    expect(seam.testFiles[1]).toBe("test/learning/phase/b-gate.test.ts");
-    expect(seam.suites[0]).toContain("a-gate");
-    expect(seam.suites[1]).toEqual(["b-gate"]);
+    expect(seam[0].testFile).toBe("test/learning/phase/a-gate.test.ts");
+    expect(seam[1].testFile).toBe("test/learning/phase/b-gate.test.ts");
+    expect(seam[0].suites.map((suite) => suite.name)).toContain("a-gate");
+    expect(seam[1].suites.map((suite) => suite.name)).toEqual(["b-gate"]);
 
     // The ordering invariant itself: a red C blocks D.
     const order = runScriptModule(
@@ -1453,22 +1571,45 @@ describe.skipIf(INSIDE_PHASE_CHECK)("phase-check C stage", () => {
     expect(order).not.toHaveProperty("greenWhileRed");
   }, 60_000);
 
-  test(
-    "--through=D exits non-zero while C is red",
-    () => {
-      const result = runPhaseCheck(["--through=D", "--simulate", "C=fail"], {
-        timeoutMs: 30 * 60 * 1000,
-      });
-      expect(result.status).not.toBe(0);
-      const json = parsedStdout(result);
-      expect(json.phase).toBe("D");
-      expect(json.passed).toBe(false);
-      expect(json.failed).toMatchObject({ phase: "C", simulated: true });
-      expect(String(result.stderr)).toContain("phase C is red");
-      expect(String(result.stdout)).not.toContain('"passed":true');
-      const stages = json.stages as { name: string }[];
-      expect(stages.some((stage) => stage.name === "c-gate")).toBe(false);
-    },
-    35 * 60 * 1000,
-  );
+  test("--through=C composes A, B, then C in order and exits 0", () => {
+    const result = runPhaseCheck(["--through=C", "--root", root], {
+      timeoutMs: 120_000,
+    });
+    expect(result.status).toBe(0);
+    const json = parsedStdout(result);
+    expect(json.phase).toBe("C");
+    expect(json.passed).toBe(true);
+    expect(json.order).toMatchObject({ ok: true });
+    expect(String(result.stdout)).not.toContain("phase_not_registered");
+
+    // The chain is composed in order: A's gate, then B's, then C's own
+    // `updates` + `c-gate` suites. A/B are re-run by the CLI (against the stub
+    // root here), not assumed.
+    const names = (json.stages as { name: string }[]).map(
+      (stage) => stage.name,
+    );
+    for (const required of ["a-gate", "b-gate", "updates", "c-gate"]) {
+      expect(names).toContain(required);
+    }
+    expect(names.indexOf("a-gate")).toBeLessThan(names.indexOf("b-gate"));
+    expect(names.indexOf("b-gate")).toBeLessThan(names.indexOf("updates"));
+    expect(names.indexOf("updates")).toBeLessThan(names.indexOf("c-gate"));
+  }, 120_000);
+
+  test("--through=D exits non-zero while C is red", () => {
+    const result = runPhaseCheck(
+      ["--through=D", "--simulate", "C=fail", "--root", root],
+      { timeoutMs: 120_000 },
+    );
+    expect(result.status).not.toBe(0);
+    const json = parsedStdout(result);
+    expect(json.phase).toBe("D");
+    expect(json.passed).toBe(false);
+    expect(json.failed).toMatchObject({ phase: "C", simulated: true });
+    expect(String(result.stderr)).toContain("phase C is red");
+    expect(String(result.stdout)).not.toContain('"passed":true');
+    // C never ran its suite: the simulation stopped the chain before `c-gate`.
+    const stages = json.stages as { name: string }[];
+    expect(stages.some((stage) => stage.name === "c-gate")).toBe(false);
+  }, 120_000);
 });
