@@ -134,6 +134,21 @@ const A_SUITES = Object.freeze([
 ]);
 
 /**
+ * The B stage: waves 4a–4d (architecture §21). Phase B is the learner-visible
+ * half of the product — a published Chinese lesson, continuous follow-ups, a
+ * restart-safe conversation and a read-only answer surface — so its single gate
+ * test drives the production server instead of unit-testing the pieces. A's
+ * suites are re-run by `runPhase("B")` above; they are not duplicated here.
+ */
+const B_SUITES = Object.freeze([
+  Object.freeze({
+    name: "b-gate",
+    kind: "test",
+    paths: Object.freeze(["test/learning/phase/b-gate.test.ts"]),
+  }),
+]);
+
+/**
  * The stage registry. B/C/D append one frozen entry each; A is owned by the
  * gate-a issue and nobody else touches it.
  *
@@ -178,9 +193,14 @@ export const STAGES = Object.freeze([
       }),
     ]),
   }),
+  Object.freeze({
+    phase: "B",
+    testFile: "test/learning/phase/b-gate.test.ts",
+    suites: B_SUITES,
+  }),
 ]);
 
-/** Names the A stage must keep; deleting one is a red gate, not a green one. */
+/** Names each stage must keep; deleting one is a red gate, not a green one. */
 const REQUIRED_SUITES = Object.freeze({
   A: Object.freeze([
     "check-env",
@@ -200,6 +220,7 @@ const REQUIRED_SUITES = Object.freeze({
     "ops",
     "a-gate",
   ]),
+  B: Object.freeze(["b-gate"]),
 });
 
 function isPlainObject(value) {
