@@ -356,13 +356,16 @@ function renderCoverage(coverage: CoverageReport | null): string {
               `${gap.detail === undefined ? "" : `：${escapeHtml(gap.detail)}`}</li>`,
           )
           .join("")}</ul>`;
-  const notice = coverage.complete
+  // A report is only complete when it also has no gaps. The flag alone is not
+  // trusted: an inconsistent payload must never turn into a completeness claim.
+  const complete = coverage.complete && coverage.gaps.length === 0;
+  const notice = complete
     ? "覆盖报告：未记录未分析路径。"
     : "覆盖不完整：以下路径未被分析，结论不覆盖整个仓库，绝不声称完整。";
 
   return (
     `<section class="panel" data-testid="coverage-gaps" ` +
-    `data-complete="${coverage.complete ? "true" : "false"}">` +
+    `data-complete="${complete ? "true" : "false"}">` +
     `<h2>覆盖范围</h2>` +
     `<p class="coverage-notice">${escapeHtml(notice)}</p>${gaps}` +
     `<p class="coverage-counts">已分析 ${String(coverage.counts.analyzedFiles)} / ` +

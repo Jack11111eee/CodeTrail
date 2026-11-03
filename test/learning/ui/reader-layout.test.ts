@@ -50,6 +50,13 @@ describe("reader layout", () => {
     expect(block).toContain('[data-testid="reader-qa"]');
   });
 
+  it("states the force-push polling limit on the reader", () => {
+    const html = renderReaderPage(pageContext, readerModel());
+    expect(countTestId(html, "polling-note")).toBe(1);
+    expect(html).toContain("force-push");
+    expect(html).toContain("无法保证");
+  });
+
   it("renders an empty reader when there is no active lesson", () => {
     const html = renderReaderPage(
       pageContext,

@@ -4,7 +4,7 @@ import {
   ensureDataDir,
   resolveDataPaths,
 } from "../../../src/learning/config/paths.ts";
-import { createStaticUi } from "../../../src/learning/api/static.ts";
+import { createStaticUi, UI_ROUTES } from "../../../src/learning/api/static.ts";
 import { renderProjectsPage } from "../../../src/learning/ui/pages/projects.ts";
 import { httpRequest, startStubServer } from "../helpers/stub-server.ts";
 import type { StubServer } from "../helpers/stub-server.ts";
@@ -91,6 +91,18 @@ describe("projects page", () => {
 });
 
 describe("static-UI seam through a real listener", () => {
+  it("declares exactly the documented UI route table", () => {
+    expect(UI_ROUTES.map((route) => `${route.method} ${route.pattern}`)).toEqual([
+      "GET /",
+      "GET /learn",
+      "GET /learn/reader",
+      "GET /inbox",
+      "GET /terms",
+      "GET /settings",
+      "GET /assets/*",
+    ]);
+  });
+
   let server: StubServer | null = null;
 
   beforeEach(async () => {

@@ -71,6 +71,13 @@ describe("update inbox", () => {
     expect(html).toContain("cursor=cursor-token");
   });
 
+  it("states the force-push polling limit on the inbox", () => {
+    const html = renderInboxPage(pageContext, inboxModel());
+    expect(countTestId(html, "polling-note")).toBe(1);
+    expect(html).toContain("force-push");
+    expect(html).toContain("无法保证");
+  });
+
   it("renders an empty inbox with a zero gap badge", () => {
     const html = renderInboxPage(
       pageContext,

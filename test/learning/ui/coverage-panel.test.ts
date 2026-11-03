@@ -59,6 +59,24 @@ describe("coverage panel", () => {
     expect(html).toContain("覆盖不完整");
   });
 
+  it("never trusts a complete flag that contradicts its own gap list", () => {
+    const html = renderReaderPage(
+      pageContext,
+      readerModel({
+        coverage: coverage({
+          complete: true,
+          gaps: [
+            { path: "vendor/lib.go", reason: "excluded_by_scope", bytes: 1 },
+          ],
+        }),
+      }),
+    );
+    expect(html).toContain('data-path="vendor/lib.go"');
+    expect(html).not.toContain("覆盖报告：未记录未分析路径");
+    expect(html).toContain("覆盖不完整");
+    expect(html).toContain('data-complete="false"');
+  });
+
   it("renders a complete report without inventing gaps", () => {
     const html = renderReaderPage(
       pageContext,
