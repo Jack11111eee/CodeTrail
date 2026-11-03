@@ -256,9 +256,18 @@ export function createGithubClient(deps: {
 
     async rateLimit(): Promise<{ remaining: number; resetAt: string } | null> {
       const { headers } = await get("/rate_limit");
-      const remaining = Number(headers.get("x-ratelimit-remaining") ?? "");
-      const reset = Number(headers.get("x-ratelimit-reset") ?? "");
+      const remainingHeader = headers.get("x-ratelimit-remaining");
+      // A missing header means "unknown", not zero: `Number("") === 0`.
+      if (remainingHeader === null || remainingHeader.trim() === "") {
+        return null;
+      }
+      const remaining = Number(remainingHeader);
       if (!Number.isFinite(remaining)) return null;
+      const resetHeader = headers.get("x-ratelimit-reset");
+      const reset =
+        resetHeader === null || resetHeader.trim() === ""
+          ? Number.NaN
+          : Number(resetHeader);
       return {
         remaining,
         resetAt: Number.isFinite(reset)

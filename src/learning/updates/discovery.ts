@@ -48,6 +48,7 @@ import {
   LESSON_PIPELINE_VERSION,
   MAX_FILES,
   MAX_LOOKBACK_MS,
+  PR_OVERLAP_MS,
   PROMPT_TEMPLATE_VERSION,
 } from "../config/defaults.js";
 import { mirrorPath } from "../config/paths.js";
@@ -220,6 +221,29 @@ export function insertJobRow(
 }
 
 /**
+ * Drops events whose stable identity is already persisted (or repeated inside
+ * the batch). Re-baselining a head that already has a baseline — a branch
+ * rename with no new commit, or a force-push back to a previously seen head —
+ * recomputes the same `event_key`; a plain insert would violate
+ * `UNIQUE(event_key)`, roll the whole discovery transaction back and stall the
+ * cursor forever (AC-UPD-14/15).
+ */
+function pendingEvents(
+  repos: Repositories,
+  events: NewChangeEvent[],
+): NewChangeEvent[] {
+  const seen = new Set<string>();
+  const pending: NewChangeEvent[] = [];
+  for (const event of events) {
+    if (seen.has(event.eventKey)) continue;
+    seen.add(event.eventKey);
+    if (repos.changes.byId(event.eventId) !== null) continue;
+    pending.push(event);
+  }
+  return pending;
+}
+
+/**
  * Writes events + pending jobs + the discovery cursor in **one** transaction
  * (§12.3). Model analysis happens only after this returns; a failed
  * compare-and-swap rolls back everything, so the cursor can never advance past
@@ -231,8 +255,9 @@ export async function commitDiscovery(
 ): Promise<void> {
   const at = deps.clock.now().toISOString();
   deps.db.transaction(() => {
-    if (commit.events.length > 0) {
-      deps.repos.changes.insertMany(commit.events);
+    const events = pendingEvents(deps.repos, commit.events);
+    if (events.length > 0) {
+      deps.repos.changes.insertMany(events);
     }
     for (const input of commit.jobs) {
       insertJobRow(deps.repos, input, at);
@@ -498,7 +523,7 @@ function baseEvent(i: {
 
 /** Implements `DiscoveryService` (§3.16). */
 export function createDiscoveryService(deps: DiscoveryDeps): DiscoveryService {
-  const { repos, clock, github } = deps;
+  const { repos, github } = deps;
 
   async function observedHead(
     mirror: MirrorHandle,
@@ -545,11 +570,10 @@ export function createDiscoveryService(deps: DiscoveryDeps): DiscoveryService {
     projectId: ProjectId,
     opts: DiscoveryOptions,
   ): Promise<DiscoveryResult> {
-    void opts;
     const { project, repo, mirror } = resolveProject(deps, projectId);
     assertGithubProject(project);
     const ownerRepo = ownerRepoOf(repo);
-    const at = clock.now().toISOString();
+    const at = opts.now.toISOString();
     const previous = repos.cursors.get(
       repo.repoId,
       DEFAULT_BRANCH_STREAM,
@@ -580,6 +604,16 @@ export function createDiscoveryService(deps: DiscoveryDeps): DiscoveryService {
           mergeBaseSha: null,
           baseContextSha: null,
         });
+        const eventId = changeEventIdFromKey(eventKey);
+        // A head can already carry a baseline: a rename without a new commit,
+        // or a force-push back to a previously baselined head. The event is
+        // already persisted, so a second insert would abort discovery.
+        if (
+          repos.changes.byId(eventId) !== null ||
+          events.some((event) => event.eventId === eventId)
+        ) {
+          return;
+        }
         events.push(
           baseEvent({
             eventKey,
@@ -784,7 +818,7 @@ export function createDiscoveryService(deps: DiscoveryDeps): DiscoveryService {
     const { project, repo, mirror } = resolveProject(deps, projectId);
     assertGithubProject(project);
     const ownerRepo = ownerRepoOf(repo);
-    const at = clock.now().toISOString();
+    const at = opts.now.toISOString();
     const stored = repos.cursors.get(
       repo.repoId,
       PULL_REQUEST_DISCOVERY_STREAM,
@@ -792,7 +826,10 @@ export function createDiscoveryService(deps: DiscoveryDeps): DiscoveryService {
     );
     let expectedPrevious: CursorJson | null = stored;
     let cursor = stored ?? emptyCursor("pull_request");
-    const start = windowStart(cursor, opts.now, MAX_LOOKBACK_MS);
+    const overlapMs = Number.isFinite(opts.overlapMs)
+      ? opts.overlapMs
+      : PR_OVERLAP_MS;
+    const start = windowStart(cursor, opts.now, MAX_LOOKBACK_MS, overlapMs);
 
     const scopeHash = scopeHashOf(project);
     const configHash = computeConfigHash(defaultAnalysisConfig(repos));
@@ -802,8 +839,13 @@ export function createDiscoveryService(deps: DiscoveryDeps): DiscoveryService {
     let gaps = 0;
     let page = cursor.page ?? 1;
     let closed = false;
+    // `maxPages` is a per-tick budget, not an absolute page ceiling: an open
+    // window whose page already exceeds it must still make progress on the
+    // next tick, otherwise the PR stream stalls forever.
+    let pagesThisTick = 0;
 
-    while (!closed && page <= opts.maxPages) {
+    while (!closed && pagesThisTick < opts.maxPages) {
+      pagesThisTick += 1;
       const pageResult = await github.pullRequests(ownerRepo, {
         state: "all",
         sort: "updated",

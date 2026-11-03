@@ -86,4 +86,21 @@ describe("no GitHub writes", () => {
       "rateLimit",
     ]);
   });
+
+  it("reports an unknown rate limit when the header is absent", async () => {
+    fake = await startFakeGithub({
+      ownerRepo: "acme/widgets",
+      pages: 1,
+      perPage: 1,
+      omitRateLimitHeaders: true,
+    });
+    const client = createGithubClient({
+      baseUrl: fake.baseUrl,
+      credential: null,
+      clock: fixedClock(),
+    });
+
+    // A missing `X-RateLimit-Remaining` is unknown, never "0 remaining".
+    await expect(client.rateLimit()).resolves.toBeNull();
+  });
 });

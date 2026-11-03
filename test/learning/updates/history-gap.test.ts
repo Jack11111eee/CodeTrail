@@ -54,4 +54,39 @@ describe("history gap", () => {
     expect(harness.discoveryCursor()?.lastGapSha).toBe(oldHead);
     expect(harness.discoveryCursor()?.headSha).toBe(newHead);
   });
+
+  it("does not duplicate a baseline when a force-push rewinds to an old head", async () => {
+    harness = await createUpdateHarness();
+    const original = harness.git.head("main");
+    await harness.tick();
+    expect(
+      harness.events().filter((event) => event.kind === "baseline"),
+    ).toHaveLength(1);
+
+    // Rewrite history to an unrelated root and baseline it.
+    harness.git.git(["checkout", "-q", "--orphan", "rewritten"]);
+    harness.git.git(["rm", "-rf", "."]);
+    harness.git.write("src/rewritten.ts", "export const rewritten = true;\n");
+    const rewritten = harness.git.commit("rewrite: new root");
+    harness.git.forceBranch("main", rewritten);
+    harness.git.checkout("main");
+    expect((await harness.tick()).gaps).toBe(1);
+    expect(harness.discoveryCursor()?.headSha).toBe(rewritten);
+
+    // Rewind the default branch onto a head that already has a baseline.
+    harness.git.git(["reset", "--hard", original]);
+    const second = await harness.tick();
+    expect(second.gaps).toBe(1);
+
+    const baselines = harness
+      .events()
+      .filter(
+        (event) => event.kind === "baseline" && event.headSha === original,
+      );
+    expect(baselines).toHaveLength(1);
+    expect(harness.discoveryCursor()?.headSha).toBe(original);
+
+    // The cursor advanced, so the next tick has nothing to re-discover.
+    expect((await harness.tick()).discovered).toBe(0);
+  });
 });

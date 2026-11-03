@@ -127,4 +127,34 @@ describe("squash ambiguity", () => {
       }),
     ).toBe(decision.prFingerprint);
   });
+
+  it("keeps both records when only the merge base differs", () => {
+    const decision = decideLinkage({
+      prHeadTreeHash: "same-tree",
+      mainTreeHash: "same-tree",
+      prMergeBaseSha: "base-pr",
+      mainMergeBaseSha: "base-main",
+      scopeHash: "scope",
+      configHash: "cfg",
+    });
+    expect(decision.reason).toBe("merge_base_differs");
+    expect(decision.relation).toBe("supplementary");
+    expect(decision.prFingerprint).not.toBe(decision.mainFingerprint);
+  });
+
+  it("keeps both records when the analysis config differs", () => {
+    const decision = decideLinkage({
+      prHeadTreeHash: "same-tree",
+      mainTreeHash: "same-tree",
+      prMergeBaseSha: "base",
+      mainMergeBaseSha: "base",
+      scopeHash: "scope",
+      configHash: "cfg",
+      prConfigHash: "cfg-pr",
+      mainConfigHash: "cfg-main",
+    });
+    expect(decision.reason).toBe("config_differs");
+    expect(decision.relation).toBe("supplementary");
+    expect(decision.prFingerprint).not.toBe(decision.mainFingerprint);
+  });
 });

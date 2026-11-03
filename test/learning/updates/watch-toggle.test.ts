@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 
+import type { ProjectId } from "../../../src/learning/contracts/index.ts";
+import { createWatchScheduler } from "../../../src/learning/updates/watch.ts";
 import {
   cleanupHarness,
   createUpdateHarness,
@@ -53,5 +55,61 @@ describe("watch toggle", () => {
     const result = await harness.tick();
     expect(result.projectId).toBe(harness.project.projectId);
     expect(harness.events().length).toBeGreaterThan(0);
+  });
+
+  it("creates no events for uncommitted filesystem-only changes", async () => {
+    harness = await createUpdateHarness();
+    await harness.tick();
+    const head = harness.discoveryCursor()?.headSha;
+    const stored = harness.events().length;
+
+    // A working-tree edit with no commit is invisible to discovery: the
+    // default-branch stream follows commits, never the filesystem.
+    harness.git.write("src/app.ts", "export const value = 99;\n");
+    harness.git.write("src/untracked.ts", "export const untracked = true;\n");
+
+    const result = await harness.tick();
+    expect(result.discovered).toBe(0);
+    expect(harness.events()).toHaveLength(stored);
+    expect(harness.discoveryCursor()?.headSha).toBe(head);
+  });
+
+  it("ticks only enabled GitHub projects when no project is named", async () => {
+    harness = await createUpdateHarness();
+    const base = {
+      repoId: harness.repo.repoId,
+      remoteUrl: "https://github.com/acme/widgets.git",
+      defaultBranch: "main",
+      scope: harness.project.scope,
+      createdAt: harness.clock.now().toISOString(),
+      deletedAt: null,
+    };
+    harness.repos.projects.insert({
+      ...base,
+      projectId: "p_disabled_watch" as ProjectId,
+      kind: "github",
+      displayName: "disabled",
+      watchEnabled: false,
+    });
+    harness.repos.projects.insert({
+      ...base,
+      projectId: "p_local_watch" as ProjectId,
+      kind: "local",
+      displayName: "local",
+      watchEnabled: true,
+    });
+
+    const scheduler = createWatchScheduler(harness.deps);
+    const results = await scheduler.runTick();
+
+    expect(results).toHaveLength(1);
+    expect(results[0]?.projectId).toBe(harness.project.projectId);
+    expect(
+      harness.repos.cursors.get(
+        harness.repo.repoId,
+        "default_branch",
+        "discovery",
+      )?.headSha,
+    ).toBe(harness.git.head("main"));
   });
 });

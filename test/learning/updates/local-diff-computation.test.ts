@@ -106,4 +106,38 @@ describe("local diff computation", () => {
     expect(diff.entries).toHaveLength(5);
     expect(diff.truncated).toBe(true);
   });
+
+  it("parses renames with their old path and deletions from local git", async () => {
+    harness = await createUpdateHarness();
+    harness.git.write("src/old-name.ts", "export const renamed = 1;\n");
+    harness.git.write("src/gone.ts", "export const gone = 1;\n");
+    const base = harness.git.commit("chore: base files");
+
+    harness.git.git(["mv", "src/old-name.ts", "src/new-name.ts"]);
+    harness.git.remove("src/gone.ts");
+    const head = harness.git.commit("refactor: rename and delete");
+
+    const diff = await diffBetween(
+      {
+        repoId: harness.repo.repoId,
+        path: harness.git.path,
+        identity: harness.repo.identity,
+      },
+      base,
+      head,
+      { maxFiles: 100 },
+    );
+
+    expect(diff.entries).toEqual(
+      expect.arrayContaining([
+        {
+          path: "src/new-name.ts",
+          status: "R",
+          oldPath: "src/old-name.ts",
+        },
+        { path: "src/gone.ts", status: "D" },
+      ]),
+    );
+    expect(diff.gaps).toHaveLength(0);
+  });
 });

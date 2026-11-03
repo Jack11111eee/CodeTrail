@@ -26,7 +26,10 @@ describe("change job retry scope", () => {
     harness = undefined;
   });
 
-  function seedJob(state: "completed" | "running", id: string): JobId {
+  function seedJob(
+    state: "completed" | "running" | "interrupted",
+    id: string,
+  ): JobId {
     const jobId = id as JobId;
     harness!.repos.jobs.insert({
       jobId,
@@ -52,7 +55,9 @@ describe("change job retry scope", () => {
       createdAt: harness!.clock.now().toISOString(),
       startedAt: harness!.clock.now().toISOString(),
       finishedAt:
-        state === "completed" ? harness!.clock.now().toISOString() : null,
+        state === "completed" || state === "interrupted"
+          ? harness!.clock.now().toISOString()
+          : null,
     });
     return jobId;
   }
@@ -90,6 +95,18 @@ describe("change job retry scope", () => {
     await expect(runner.retry(running)).rejects.toMatchObject({
       code: "job_not_retryable",
     });
+    expect(harness.events()).toHaveLength(0);
+  });
+
+  it("retries an interrupted change job", async () => {
+    harness = await createUpdateHarness();
+    const { runner } = createRealRunner(harness);
+    const interrupted = seedJob("interrupted", "j_interrupted_test");
+
+    const retried = await runner.retry(interrupted);
+    expect(retried.state).toBe("queued");
+    expect(retried.attempt).toBe(1);
+    await runner.drain();
     expect(harness.events()).toHaveLength(0);
   });
 });

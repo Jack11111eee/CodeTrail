@@ -55,4 +55,32 @@ describe("branch rename", () => {
     expect(harness.discoveryCursor()?.branch).toBe("trunk");
     expect(harness.discoveryCursor()?.headSha).toBe(newHead);
   });
+
+  it("does not duplicate the baseline when a branch is renamed without a commit", async () => {
+    harness = await createUpdateHarness();
+    const head = harness.git.head("main");
+    await harness.tick();
+    expect(
+      harness.events().filter((event) => event.kind === "baseline"),
+    ).toHaveLength(1);
+
+    // The default branch changes name but its head already has a baseline.
+    harness.git.renameBranch("main", "trunk");
+    harness.github.setBranch("trunk");
+
+    // Discovery must not throw on the second baseline's `UNIQUE(event_key)`.
+    const result = await harness.tick();
+    expect(result.discovered).toBeGreaterThanOrEqual(1);
+
+    const events = harness.events();
+    expect(events.some((event) => event.kind === "branch_switch")).toBe(true);
+    expect(events.filter((event) => event.kind === "baseline")).toHaveLength(1);
+    expect(harness.discoveryCursor()?.branch).toBe("trunk");
+    expect(harness.discoveryCursor()?.headSha).toBe(head);
+
+    // The cursor advanced, so a follow-up tick is a quiet no-op.
+    const next = await harness.tick();
+    expect(next.discovered).toBe(0);
+    expect(harness.discoveryCursor()?.branch).toBe("trunk");
+  });
 });
