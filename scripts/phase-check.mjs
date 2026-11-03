@@ -149,6 +149,26 @@ const B_SUITES = Object.freeze([
 ]);
 
 /**
+ * The C stage: waves 5a–5b (architecture §21 invariant 4). Phase C is change
+ * follow-up, so the stage runs the whole updates suite (discovery, cursors,
+ * diffs, linkage) and then the single gate test that drives the watch tick
+ * against the fake GitHub server and the `watch-remote` fixture. A's and B's
+ * suites are re-run by `runPhase("C")` above; they are not duplicated here.
+ */
+const C_SUITES = Object.freeze([
+  Object.freeze({
+    name: "updates",
+    kind: "test",
+    paths: Object.freeze(["test/learning/updates"]),
+  }),
+  Object.freeze({
+    name: "c-gate",
+    kind: "test",
+    paths: Object.freeze(["test/learning/phase/c-gate.test.ts"]),
+  }),
+]);
+
+/**
  * The stage registry. B/C/D append one frozen entry each; A is owned by the
  * gate-a issue and nobody else touches it.
  *
@@ -198,6 +218,11 @@ export const STAGES = Object.freeze([
     testFile: "test/learning/phase/b-gate.test.ts",
     suites: B_SUITES,
   }),
+  Object.freeze({
+    phase: "C",
+    testFile: "test/learning/phase/c-gate.test.ts",
+    suites: C_SUITES,
+  }),
 ]);
 
 /** Names each stage must keep; deleting one is a red gate, not a green one. */
@@ -221,6 +246,7 @@ const REQUIRED_SUITES = Object.freeze({
     "a-gate",
   ]),
   B: Object.freeze(["b-gate"]),
+  C: Object.freeze(["updates", "c-gate"]),
 });
 
 function isPlainObject(value) {
