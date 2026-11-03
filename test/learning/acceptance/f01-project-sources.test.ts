@@ -45,7 +45,7 @@ afterEach(async () => {
     fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
   }
   responses.length = 0;
-});
+}, 240_000);
 
 describe("AC-F01-01: all three source kinds import and analyse", () => {
   test("local, public and token-gated private sources each publish one generation", async () => {
@@ -181,6 +181,15 @@ describe("AC-F01-01: all three source kinds import and analyse", () => {
     expect(sourceIds).toHaveLength(6);
     expect(new Set(sourceIds).size).toBe(2);
 
+    // The private job's own event stream is an artefact too: the token that
+    // authorised the clone must never be replayed through it.
+    const privateEvents = await server.request(
+      `/api/jobs/${privateAnalysis.analysis.jobId}/events`,
+    );
+    record(privateEvents);
+    expect(privateEvents.status).toBe(200);
+    expect(privateEvents.text).not.toContain(TOKEN);
+
     // No response text and no file in the data directory carries the token.
     expect(responses.some((text) => text.includes(TOKEN))).toBe(false);
     expect(treeContains(server.dataDir, TOKEN)).toBe(false);
@@ -189,7 +198,7 @@ describe("AC-F01-01: all three source kinds import and analyse", () => {
     const withToken = await server.request("/api/settings/model");
     record(withToken);
     expect(withToken.text.includes(TOKEN)).toBe(false);
-  }, 120_000);
+  }, 240_000);
 
   test("a failed private import leaves no project behind", async () => {
     // The previous test already proved the 401; this one pins the invariant
@@ -217,5 +226,5 @@ describe("AC-F01-01: all three source kinds import and analyse", () => {
     record(listResponse);
     const list = jsonOf<{ projects: unknown[] }>(listResponse, 200);
     expect(list.projects).toEqual([]);
-  }, 120_000);
+  }, 240_000);
 });

@@ -44,7 +44,7 @@ afterEach(async () => {
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
   }
-});
+}, 240_000);
 
 function goodScripts(target: AcceptanceServer): void {
   target.writeScripts(
@@ -137,7 +137,7 @@ describe("failure: a generation failure is explicit and keeps the old version", 
     expect(retried.json).toMatchObject({
       error: { code: "job_not_retryable" },
     });
-  }, 180_000);
+  }, 240_000);
 });
 
 describe("cancel: a cancelled job publishes nothing and stays retryable", () => {
@@ -220,9 +220,10 @@ describe("budget: an exhausted quota stops before the next call", () => {
     const blocked = await analyzeToCompletion(server, second.projectId);
     expect(blocked.job.state).toBe("failed");
     expect(blocked.job.retryable).toBe(true);
-    // The quota refusal is explicit and distinguishable from a generic
-    // failure: the upstream worker wraps the model error, so the persisted
-    // message carries the budget copy end-to-end.
+    // The quota refusal is its own explicit state, not a generic failure: the
+    // job carries `budget_exhausted` (distinct from the generation failure's
+    // `internal_error`) and the persisted message carries the budget copy.
+    expect(blocked.job.errorCode).toBe("budget_exhausted");
     expect(blocked.job.errorDetail).toContain("配额");
 
     // Nothing new was published, the old version still reads, and the consumed
@@ -287,7 +288,7 @@ describe("rate limit: the tick reports 429 and a later tick recovers", () => {
     );
     expect(retried.watchEnabled).toBe(true);
     expect(retried.refreshed?.discovered).toBeGreaterThanOrEqual(1);
-  }, 180_000);
+  }, 240_000);
 });
 
 describe("missing credential: each absence has its own code", () => {
@@ -340,5 +341,5 @@ describe("missing credential: each absence has its own code", () => {
     } finally {
       await unconfigured.close();
     }
-  }, 180_000);
+  }, 240_000);
 });

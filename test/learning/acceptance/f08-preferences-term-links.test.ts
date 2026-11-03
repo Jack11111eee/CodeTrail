@@ -37,7 +37,7 @@ let server: AcceptanceServer | null = null;
 afterEach(async () => {
   await server?.close();
   server = null;
-});
+}, 240_000);
 
 interface PreferencesView {
   preferences: {

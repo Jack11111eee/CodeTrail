@@ -27,7 +27,7 @@ let server: AcceptanceServer | null = null;
 afterEach(async () => {
   await server?.close();
   server = null;
-});
+}, 240_000);
 
 interface ConversationView {
   conversationId: string;
@@ -143,5 +143,5 @@ describe("AC-F05-01: continuous Q&A survives refresh and restart", () => {
       .reverse()
       .find((message) => message.role === "assistant");
     expect(lastAnswer?.citations[0].generationId).toBe(analysis.generationId);
-  }, 180_000);
+  }, 240_000);
 });

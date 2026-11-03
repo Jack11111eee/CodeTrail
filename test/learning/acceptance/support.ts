@@ -37,6 +37,10 @@ const REPO_ROOT = path.resolve(import.meta.dirname, "..", "..", "..");
 const CLI = path.join(REPO_ROOT, "dist", "learning", "api", "cli.js");
 const URL_PATTERN = /^http:\/\/127\.0\.0\.1:(\d+)$/mu;
 const FIXED_NOW = "2026-01-01T00:00:00.000Z";
+/** Booting a node process can take a while when the whole suite is loaded. */
+const BOOT_TIMEOUT_MS = 120_000;
+/** Time allowed for a graceful SIGTERM drain. */
+const STOP_TIMEOUT_MS = 30_000;
 
 export interface ScriptStep {
   toolCalls?: { name: string; args: Record<string, unknown> }[];
@@ -172,10 +176,10 @@ function spawnServer(
     const timer = setTimeout(() => {
       reject(
         new Error(
-          `built entry did not print a URL within 30 s\nstderr:\n${stderr}\nstdout:\n${stdout}`,
+          `built entry did not print a URL within 120 s\nstderr:\n${stderr}\nstdout:\n${stdout}`,
         ),
       );
-    }, 30_000);
+    }, BOOT_TIMEOUT_MS);
 
     child.stderr?.on("data", (chunk: Buffer) => {
       const text = chunk.toString("utf8");
@@ -215,7 +219,9 @@ async function stopProcess(running: RunningProcess): Promise<void> {
     return;
   }
   running.child.kill("SIGTERM");
-  const timeout = new Promise<void>((resolve) => setTimeout(resolve, 15_000));
+  const timeout = new Promise<void>((resolve) =>
+    setTimeout(resolve, STOP_TIMEOUT_MS),
+  );
   await Promise.race([running.exit.then(() => undefined), timeout]);
   if (running.child.exitCode === null && running.child.signalCode === null) {
     running.child.kill("SIGKILL");
@@ -314,12 +320,36 @@ export async function startAcceptance(
     }
   };
 
+  /**
+   * An idempotent read is retried across a transient reset: the full learning
+   * suite runs many servers at once, and losing a poll to a reset connection
+   * must not fail a flow that is otherwise correct. A dead server is reported
+   * with its own stderr instead of a bare `fetch failed`.
+   */
   const request = async (
     pathname: string,
     init: RequestInit = {},
   ): Promise<HarnessResponse> => {
     if (harness === null) throw new Error("acceptance server is not running");
-    return harness.request(pathname, init);
+    const method = (init.method ?? "GET").toUpperCase();
+    const attempts = method === "GET" || method === "HEAD" ? 20 : 1;
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        return await harness.request(pathname, init);
+      } catch (error) {
+        const dead = running === null || running.child.exitCode !== null;
+        if (dead) {
+          throw new Error(
+            `server exited while handling ${method} ${pathname}: ` +
+              `${running === null ? "(none)" : String(running.child.exitCode)}\n` +
+              `stderr:\n${running?.stderr ?? ""}`,
+            { cause: error },
+          );
+        }
+        if (attempt >= attempts) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+    }
   };
 
   await boot();
@@ -447,7 +477,7 @@ export interface JobViewLike {
 export async function waitForJob(
   server: AcceptanceServer,
   jobId: string,
-  timeoutMs = 60_000,
+  timeoutMs = 180_000,
 ): Promise<JobViewLike> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {

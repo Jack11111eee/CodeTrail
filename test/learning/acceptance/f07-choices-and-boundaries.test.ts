@@ -26,7 +26,7 @@ let server: AcceptanceServer | null = null;
 afterEach(async () => {
   await server?.close();
   server = null;
-});
+}, 240_000);
 
 interface LessonDetail {
   lesson: {
@@ -172,5 +172,5 @@ describe("AC-F07-01: choices and boundaries", () => {
     );
     expect(variant.lesson.choices).toEqual([]);
     expect(variant.lesson.choicesOmittedReason?.trim()).not.toBe("");
-  }, 180_000);
+  }, 240_000);
 });

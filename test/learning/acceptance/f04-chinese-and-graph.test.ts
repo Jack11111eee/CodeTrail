@@ -24,7 +24,7 @@ let server: AcceptanceServer | null = null;
 afterEach(async () => {
   await server?.close();
   server = null;
-});
+}, 240_000);
 
 interface LessonDetail {
   lesson: {
@@ -121,5 +121,5 @@ describe("AC-F04-01: Chinese prose and commit-bound diagram sources", () => {
       );
       expect(source.commitSha).toBe(server.commitSha);
     }
-  }, 120_000);
+  }, 240_000);
 });

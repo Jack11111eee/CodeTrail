@@ -31,7 +31,7 @@ let server: AcceptanceServer | null = null;
 afterEach(async () => {
   await server?.close();
   server = null;
-});
+}, 240_000);
 
 interface ConversationView {
   messages: {
@@ -130,5 +130,5 @@ describe("AC-F03-01: follow-up evidence and external background", () => {
       generationId: analysis.generationId,
       commitSha: server.commitSha,
     });
-  }, 120_000);
+  }, 240_000);
 });

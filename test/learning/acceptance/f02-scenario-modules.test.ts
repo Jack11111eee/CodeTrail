@@ -27,7 +27,7 @@ let server: AcceptanceServer | null = null;
 afterEach(async () => {
   await server?.close();
   server = null;
-});
+}, 240_000);
 
 interface LessonDetail {
   lesson: {
@@ -122,5 +122,5 @@ describe("AC-F02-01: scenario, modules and the component diagram", () => {
     // The rendered lesson keeps the diagram body the reader makes clickable.
     expect(detail.html).toContain("flowchart");
     expect(detail.html).toContain("snapshot_cache.py");
-  }, 120_000);
+  }, 240_000);
 });

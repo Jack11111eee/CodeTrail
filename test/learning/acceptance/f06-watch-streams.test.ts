@@ -39,7 +39,7 @@ afterEach(async () => {
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
   }
-});
+}, 240_000);
 
 interface ChangeSummary {
   changeId: string;

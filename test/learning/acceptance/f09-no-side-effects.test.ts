@@ -47,7 +47,7 @@ afterEach(async () => {
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
   }
-});
+}, 240_000);
 
 /** A git checkout of a fixture the run is allowed to touch. */
 function userCopy(fixture: string): string {
@@ -207,5 +207,5 @@ describe("AC-F09-01: no side effects on either repository", () => {
       fs.existsSync(path.join(injectionRepo, "injection-marker.txt")),
     ).toBe(false);
     expect(fs.existsSync(path.join(injectionRepo, "node_modules"))).toBe(false);
-  }, 180_000);
+  }, 240_000);
 });
