@@ -129,11 +129,16 @@ export function decideLinkage(i: DecideLinkageInput): LinkageDecision {
  * Persists a linkage. The write is intentionally a thin wrapper around
  * `ChangesRepo.link`, so it can only run inside the publisher's transaction.
  */
-export function createLinkageService(deps: {
+export function createLinkageService(deps?: {
   repos: Repositories;
 }): LinkageService {
   return {
     link(i): Promise<void> {
+      if (deps === undefined) {
+        throw new LearningError("internal_error", "链接服务缺少仓库依赖", {
+          reason: "linked_event_missing",
+        });
+      }
       const pr = deps.repos.changes.byId(i.prEventId);
       if (pr === null) {
         throw new LearningError("internal_error", "PR 事件不存在", {
