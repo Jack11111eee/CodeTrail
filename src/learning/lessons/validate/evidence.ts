@@ -18,7 +18,6 @@
 
 import { sliceHash, sliceLines } from "../../contracts/index.js";
 import type {
-  ExternalSourceRef,
   SnapshotReader,
   SourceId,
   SourceRef,
@@ -68,10 +67,16 @@ const DESIGN_DOC_PATTERN =
   /(?:design|decision|adr|rfc|architecture|rationale|proposal|specification|design-doc)/iu;
 
 /**
- * True when an external source is a design/decision document. Used by the
- * label/source matrix (AC-LES-06) and by boundary status (AC-LES-05).
+ * True when a source is a design/decision document. A decision record lives in
+ * the analysed repository (`docs/decisions/decision-log.md`,
+ * `docs/design/*.md`) just as often as on an external page, so a repository
+ * path participates in the same matrix. Used by the label/source matrix
+ * (AC-LES-06) and by boundary status (AC-LES-05).
  */
-export function isDesignDoc(ref: SourceRef): ref is ExternalSourceRef {
+export function isDesignDoc(ref: SourceRef): boolean {
+  if (ref.kind === "repo") {
+    return DESIGN_DOC_PATTERN.test(ref.path);
+  }
   if (ref.kind !== "external") return false;
   return DESIGN_DOC_PATTERN.test(
     `${ref.title} ${ref.canonicalUrl} ${ref.locator}`,
