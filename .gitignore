@@ -1,0 +1,70 @@
+# --- Pipeline / agent artifacts ---
+.artifacts/
+.worktrees/
+.omc/
+.agentfield-out-*/
+my-product-build.json
+
+# --- Environment ---
+.env
+.env.*
+!.env.example
+
+# --- OS / editor ---
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+
+# --- Node.js / TypeScript ---
+node_modules/
+.pnp
+.pnp.js
+.yarn/cache
+.yarn/install-state.gz
+.pnpm-store/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+.npm/
+.eslintcache
+.stylelintcache
+
+# Build output
+dist/
+build/
+out/
+lib-cov/
+*.tsbuildinfo
+.next/
+.turbo/
+.temp/
+.cache/
+*.tgz
+
+# Test / coverage
+coverage/
+.nyc_output/
+*.lcov
+
+# --- Python (tooling / scripts) ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# --- Local data / logs ---
+logs/
+*.log
+data/
+.tmp/
+# Transient OpenWiki run state; the scheduled workflow deletes it before committing.
+openwiki/.run.json
+
+# --- Misc binaries ---
+*.sqlite
+*.sqlite3
+*.db-wal

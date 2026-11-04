@@ -1,0 +1,425 @@
+/*
+ * Codetrail learning UI (architecture §15).
+ *
+ * Three-column reader on wide screens; the 900px query stacks and toggles the
+ * three reader regions. Everything is local: no web font, no CDN, no inline
+ * style attribute is required by the server-rendered pages.
+ */
+
+:root {
+  color-scheme: light dark;
+  --bg: #f7f8fa;
+  --panel: #ffffff;
+  --text: #1c2430;
+  --muted: #5b6778;
+  --border: #d8dee8;
+  --accent: #1f6feb;
+  --accent-soft: #e8f0ff;
+  --danger: #b42318;
+  --gap: #fff4d6;
+  --code-bg: #f1f4f8;
+  --radius: 10px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0d1117;
+    --panel: #161b22;
+    --text: #e6edf3;
+    --muted: #9aa7b5;
+    --border: #2a323d;
+    --accent: #6ea8fe;
+    --accent-soft: #1b2a44;
+    --danger: #ff8a80;
+    --gap: #3b2f12;
+    --code-bg: #0b1017;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC",
+    "PingFang SC", "Microsoft YaHei", sans-serif;
+  line-height: 1.6;
+}
+
+a {
+  color: var(--accent);
+}
+
+code,
+pre {
+  background: var(--code-bg);
+  border-radius: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+code {
+  padding: 0.1em 0.35em;
+}
+
+pre {
+  overflow-x: auto;
+  padding: 12px;
+}
+
+pre code {
+  padding: 0;
+}
+
+.site-header {
+  align-items: center;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  gap: 20px;
+  padding: 12px 24px;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.site-header .brand {
+  color: var(--text);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.site-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.site-nav a {
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.site-nav a[aria-current="page"] {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.page {
+  margin: 0 auto;
+  max-width: 1500px;
+  padding: 24px;
+}
+
+.page-head h1 {
+  margin: 0 0 4px;
+}
+
+.page-head p,
+.polling-note,
+.usage-note,
+.watch-reason {
+  color: var(--muted);
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin: 16px 0;
+  padding: 16px;
+}
+
+.add-grid,
+.terms-grid,
+.settings-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+.project-list,
+.inbox-list,
+.lesson-nav,
+.qa-stream,
+.qa-citations,
+.coverage-gap-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.project-card,
+.inbox-item {
+  border-top: 1px solid var(--border);
+  padding: 12px 0;
+}
+
+.project-card:first-child,
+.inbox-item:first-child {
+  border-top: 0;
+}
+
+.project-meta,
+.commit-record {
+  display: grid;
+  gap: 2px 12px;
+  grid-template-columns: max-content 1fr;
+  margin: 8px 0 0;
+}
+
+.project-meta dt,
+.commit-record dt {
+  color: var(--muted);
+}
+
+.project-meta dd,
+.commit-record dd {
+  margin: 0;
+}
+
+.status-table,
+.usage-table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.status-table th,
+.status-table td,
+.usage-table th,
+.usage-table td {
+  border-bottom: 1px solid var(--border);
+  padding: 6px 8px;
+  text-align: left;
+}
+
+.reader-grid {
+  display: grid;
+  gap: 20px;
+  grid-template-columns: 240px 1fr 360px;
+  align-items: start;
+}
+
+.reader-nav,
+.reader-lesson,
+.reader-qa {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  min-width: 0;
+  padding: 16px;
+}
+
+.reader-nav {
+  position: sticky;
+  top: 72px;
+}
+
+.lesson-nav li {
+  border-top: 1px solid var(--border);
+  padding: 8px 0;
+}
+
+.lesson-nav li.active a {
+  font-weight: 700;
+}
+
+.lesson-nav .lesson-kind {
+  color: var(--muted);
+  display: block;
+  font-size: 0.8rem;
+}
+
+.lesson-block {
+  border-top: 1px solid var(--border);
+  margin-top: 16px;
+  padding-top: 8px;
+}
+
+.scenario {
+  background: var(--accent-soft);
+  border-radius: var(--radius);
+  padding: 12px;
+}
+
+details[data-collapsed="true"] {
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  margin: 8px 0;
+  padding: 8px 12px;
+}
+
+details[data-collapsed="true"] > summary {
+  color: var(--accent);
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.statement-label,
+.boundary-status,
+.gap-flag,
+.state,
+.availability {
+  background: var(--accent-soft);
+  border-radius: 999px;
+  color: var(--accent);
+  display: inline-block;
+  font-size: 0.78rem;
+  margin-right: 6px;
+  padding: 0 8px;
+}
+
+.gap-flag,
+.gap-badge {
+  background: var(--gap);
+  color: var(--danger);
+}
+
+.inbox-item.short {
+  opacity: 0.85;
+}
+
+.qa-stream {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 50vh;
+  overflow-y: auto;
+}
+
+.qa-message {
+  border-left: 3px solid var(--border);
+  padding-left: 10px;
+}
+
+.qa-message[data-role="assistant"] {
+  border-left-color: var(--accent);
+}
+
+.qa-role {
+  color: var(--muted);
+  display: block;
+  font-size: 0.78rem;
+}
+
+.qa-form textarea,
+.qa-form input,
+.panel input,
+.panel select,
+.panel textarea {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  display: block;
+  margin: 4px 0 8px;
+  padding: 8px;
+  width: 100%;
+}
+
+.qa-form button,
+.panel button {
+  background: var(--accent);
+  border: 0;
+  border-radius: 6px;
+  color: #ffffff;
+  cursor: pointer;
+  padding: 8px 14px;
+}
+
+.qa-form button:disabled,
+.panel button:disabled,
+.panel input:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.diagram-figure {
+  margin: 16px 0;
+  overflow-x: auto;
+}
+
+.diagram {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  max-width: 100%;
+  min-width: 520px;
+  width: 100%;
+}
+
+.diagram-node rect {
+  fill: var(--panel);
+  stroke: var(--accent);
+  stroke-width: 1.5;
+}
+
+.diagram-node text {
+  fill: var(--text);
+  font-size: 12px;
+}
+
+.diagram-node .diagram-badge {
+  fill: var(--danger);
+  font-size: 11px;
+}
+
+.diagram-node[data-planned="true"] rect {
+  stroke-dasharray: 6 4;
+}
+
+.diagram-node[data-demo="true"] rect {
+  stroke-dasharray: 2 3;
+}
+
+.diagram-edge line {
+  stroke: var(--muted);
+  stroke-width: 1.4;
+}
+
+.diagram-edge[data-inferred="true"] line {
+  stroke-dasharray: 5 4;
+}
+
+.diagram-edge text {
+  fill: var(--muted);
+}
+
+.coverage-notice {
+  font-weight: 600;
+}
+
+/*
+ * Narrow screens: the reader becomes a single column. Each of the three
+ * regions is named literally so the acceptance test can assert the query.
+ */
+@media (max-width: 900px) {
+  /* prettier-ignore */
+  [data-testid="reader-nav"], [data-testid="reader-lesson"], [data-testid="reader-qa"] {
+    grid-column: 1 / -1;
+    position: static;
+  }
+
+  .reader-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .reader-nav {
+    max-height: 40vh;
+    overflow-y: auto;
+  }
+
+  .page {
+    padding: 12px;
+  }
+}
