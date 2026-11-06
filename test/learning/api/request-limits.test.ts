@@ -40,7 +40,11 @@ function post(
   return httpRequest(server!.port, {
     method: "POST",
     path: "/api/projects",
-    headers: { ...server!.cookie, "Content-Type": "application/json", ...headers },
+    headers: {
+      ...server!.cookie,
+      "Content-Type": "application/json",
+      ...headers,
+    },
     body,
   });
 }
@@ -159,6 +163,7 @@ describe("REQ_SCHEMAS covers exactly the routes that take input", () => {
     "watch.put",
     "preferences.put",
     "settings.model.put",
+    "settings.model.test",
   ] as const;
   const queryKeys = [
     "projects.delete",

@@ -2,8 +2,8 @@
  * The frozen route table and the route-module registry (architecture §14.1,
  * §3.8, §3.13).
  *
- * `ROUTES` is the executable source of truth for the 32 HTTP endpoints: the 31
- * `/api/*` routes of PRD §5 plus `GET /session/bootstrap`. The route↔DTO table
+ * `ROUTES` is the executable source of truth for the HTTP endpoints: the
+ * PRD §5 routes, model connectivity test and `GET /session/bootstrap`. The route↔DTO table
  * in §3.8 is the reviewable projection; `test/learning/api/route-allowlist`
  * asserts the two ordered lists are equal, so neither may drift by one entry.
  *
@@ -45,7 +45,7 @@ function route(
 }
 
 /**
- * The exact 32-entry route table (PRD §5 + `/session/bootstrap`).
+ * The route table (PRD §5 + model connectivity test + `/session/bootstrap`).
  *
  * Deliberate deviations (architecture §14.1): manual refresh is an optional
  * body field on `PUT /api/projects/:id/watch`, and the upstream visualizer is
@@ -57,20 +57,47 @@ export const ROUTES: readonly RouteDef[] = Object.freeze([
   route("POST", "/api/projects", "session", "projects.create"),
   route("GET", "/api/projects", "session", "projects.list"),
   route("GET", "/api/projects/:id", "session", "projects.get"),
-  route("GET", "/api/projects/:id/dependents", "session", "projects.dependents"),
+  route(
+    "GET",
+    "/api/projects/:id/dependents",
+    "session",
+    "projects.dependents",
+  ),
   route("DELETE", "/api/projects/:id", "session", "projects.delete"),
   route("POST", "/api/projects/:id/analyses", "session", "analyses.create"),
-  route("POST", "/api/projects/:id/comparisons", "session", "comparisons.create"),
+  route(
+    "POST",
+    "/api/projects/:id/comparisons",
+    "session",
+    "comparisons.create",
+  ),
   route("GET", "/api/jobs/:id", "session", "jobs.get"),
   route("GET", "/api/jobs/:id/events", "session", "jobs.events"),
   route("POST", "/api/jobs/:id/cancel", "session", "jobs.cancel"),
   route("POST", "/api/jobs/:id/retry", "session", "jobs.retry"),
-  route("GET", "/api/generations/:id/lessons", "session", "generations.lessons"),
+  route(
+    "GET",
+    "/api/generations/:id/lessons",
+    "session",
+    "generations.lessons",
+  ),
   route(
     "GET",
     "/api/generations/:id/lessons/:lessonId",
     "session",
     "generations.lesson",
+  ),
+  route(
+    "DELETE",
+    "/api/generations/:id/lessons/:lessonId",
+    "session",
+    "generations.lesson.delete",
+  ),
+  route(
+    "POST",
+    "/api/generations/:id/lessons/:lessonId/restore",
+    "session",
+    "generations.lesson.restore",
   ),
   route(
     "GET",
@@ -84,6 +111,11 @@ export const ROUTES: readonly RouteDef[] = Object.freeze([
     "session",
     "generations.coverage",
   ),
+  route("POST", "/api/generations/:id/topics", "session", "topics.create"),
+  route("GET", "/api/topics/:id", "session", "topics.get"),
+  route("POST", "/api/topics/:id/messages", "session", "topics.messages"),
+  route("DELETE", "/api/topics/:id", "session", "topics.delete"),
+  route("POST", "/api/topics/:id/restore", "session", "topics.restore"),
   route("POST", "/api/conversations", "session", "conversations.create"),
   route("GET", "/api/conversations/:id", "session", "conversations.get"),
   route(
@@ -100,18 +132,14 @@ export const ROUTES: readonly RouteDef[] = Object.freeze([
   ),
   route("PUT", "/api/projects/:id/watch", "session", "watch.put"),
   route("GET", "/api/projects/:id/changes", "session", "changes.list"),
-  route(
-    "GET",
-    "/api/projects/:id/changes/:changeId",
-    "session",
-    "changes.get",
-  ),
+  route("GET", "/api/projects/:id/changes/:changeId", "session", "changes.get"),
   route("GET", "/api/preferences", "session", "preferences.get"),
   route("PUT", "/api/preferences", "session", "preferences.put"),
   route("GET", "/api/terms", "session", "terms.list"),
   route("GET", "/api/terms/:id", "session", "terms.get"),
   route("GET", "/api/settings/model", "session", "settings.model.get"),
   route("PUT", "/api/settings/model", "session", "settings.model.put"),
+  route("POST", "/api/settings/model/test", "session", "settings.model.test"),
   route("GET", "/api/usage", "session", "usage.get"),
   route("GET", "/api/storage", "session", "storage.get"),
 ]);
@@ -305,7 +333,10 @@ export function registerRouteModule(module: RouteModule): void {
 }
 
 /** A snapshot of every handler factory registered so far. */
-export function registeredHandlers(): ReadonlyMap<RouteHandlerKey, HandlerFactory> {
+export function registeredHandlers(): ReadonlyMap<
+  RouteHandlerKey,
+  HandlerFactory
+> {
   const merged = new Map<RouteHandlerKey, HandlerFactory>();
   for (const module of MODULES.values()) {
     for (const [key, factory] of module.handlers) {

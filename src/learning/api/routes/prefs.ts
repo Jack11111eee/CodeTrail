@@ -64,6 +64,19 @@ const putPreferences: HandlerFactory = (deps) => (req) => {
     );
   }
   const body = req.body as PutPreferencesRequest;
+  if (
+    body.readingPosition &&
+    deps.repos.lessons.byId(
+      body.readingPosition.generationId,
+      body.readingPosition.lessonId,
+      { includeDeleted: true },
+    )?.deletedAt
+  )
+    throw new LearningError(
+      "source_removed",
+      "这篇讲解已删除，无法保存阅读位置",
+      { reason: "lesson_deleted" },
+    );
 
   // Preferences and reading positions are written through separate statements
   // below; a payload naming only one of them never touches the other table.

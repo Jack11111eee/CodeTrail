@@ -1,7 +1,16 @@
+import { requireTopic, toTopicView } from "./routes/topics.js";
+import { lessonTitle } from "../lessons/title.js";
+import { loadModelKey } from "../config/model-credentials.js";
+import { LearningError } from "../contracts/index.js";
+import {
+  generationProjectState,
+  requirePublishedGeneration,
+  readSourceView,
+} from "./routes/generations.js";
 /**
  * The static-UI seam (architecture §14.1, §15).
  *
- * `UI_ROUTES` is declared separately from the 32 `/api/*` routes so the API
+ * `UI_ROUTES` is declared separately from the API routes so the API
  * comparison stays exact. Every page is rendered from the repositories here —
  * the renderers themselves never fetch — and the only writable surface is the
  * browser assets under `/assets/*`.
@@ -37,7 +46,7 @@ import type {
   SettingsPageModel,
   StaticUiSeam,
 } from "../contracts/index.js";
-import type { JobState } from "../contracts/index.js";
+import { latestProjectJob } from "./jobs/project-job.js";
 import { toRenderData } from "../lessons/index.js";
 import type { AnyLesson } from "../lessons/index.js";
 import { renderInboxPage } from "../ui/pages/inbox.js";
@@ -59,16 +68,6 @@ export const UI_ROUTES: readonly { method: "GET"; pattern: string }[] =
     { method: "GET", pattern: "/assets/*" },
   ]);
 
-const ALL_JOB_STATES: readonly JobState[] = Object.freeze([
-  "queued",
-  "running",
-  "cancelling",
-  "completed",
-  "failed",
-  "cancelled",
-  "interrupted",
-]);
-
 const HTML_HEADERS = Object.freeze({
   "Content-Type": "text/html; charset=utf-8",
 });
@@ -76,6 +75,7 @@ const HTML_HEADERS = Object.freeze({
 const ASSET_TYPES: Readonly<Record<string, string>> = Object.freeze({
   "styles.css": "text/css; charset=utf-8",
   "client.js": "text/javascript; charset=utf-8",
+  "theme.js": "text/javascript; charset=utf-8",
 });
 
 export interface StaticUiOptions {
@@ -144,12 +144,6 @@ function serveAsset(assetDir: string, assetName: string): RouteResponse | null {
 
 // ── projects ────────────────────────────────────────────────────────────────
 
-function latestJobState(deps: AppDeps, projectId: ProjectId): JobState | null {
-  const jobs = deps.repos.jobs.listByProject(projectId, [...ALL_JOB_STATES]);
-  const latest = jobs[jobs.length - 1];
-  return latest === undefined ? null : latest.state;
-}
-
 function toProjectSummary(
   deps: AppDeps,
   project: ProjectRecord,
@@ -157,7 +151,11 @@ function toProjectSummary(
   const generation = deps.repos.generations.latestPublished(project.repoId, {
     kind: "research",
   });
+  const job = latestProjectJob(deps.repos, project);
   return {
+    generationId: generation?.generationId ?? null,
+    latestJobId: job?.jobId ?? null,
+    latestJobResumeAvailable: job?.progress?.resumeAvailable === true,
     projectId: project.projectId,
     repoId: project.repoId,
     kind: project.kind,
@@ -165,7 +163,7 @@ function toProjectSummary(
     defaultBranch: project.defaultBranch,
     analyzedCommitSha: generation?.commitSha ?? null,
     lastSuccessAt: generation?.publishedAt ?? null,
-    latestJobState: latestJobState(deps, project.projectId),
+    latestJobState: job?.state ?? null,
     watchEnabled: project.watchEnabled,
   };
 }
@@ -205,16 +203,17 @@ function resolveGeneration(
 ): GenerationRecord | null {
   const requested = query.generation;
   if (requested !== undefined && requested !== "") {
-    return deps.repos.generations.byId(requested as GenerationId);
+    return requirePublishedGeneration(deps, requested as GenerationId);
   }
   const requestedProject = query.project;
   if (requestedProject !== undefined && requestedProject !== "") {
     const project = deps.repos.projects.byId(requestedProject as ProjectId);
-    if (project !== null) {
-      return deps.repos.generations.latestPublished(project.repoId, {
-        kind: "research",
-      });
-    }
+    if (project === null) throw new LearningError("not_found", "项目不存在");
+    if (project.deletedAt !== null)
+      throw new LearningError("source_removed", "项目已被移除");
+    return deps.repos.generations.latestPublished(project.repoId, {
+      kind: "research",
+    });
   }
   for (const project of deps.repos.projects.list()) {
     const generation = deps.repos.generations.latestPublished(project.repoId, {
@@ -279,7 +278,7 @@ function toLessonSummary(
   return {
     lessonId: row.lessonId,
     kind: row.kind,
-    title: row.title,
+    title: lessonTitle(row.title, row.kind, lesson),
     moduleIds: lesson?.context.moduleIds ?? [],
     hasCoverageGaps: (lesson?.coverageGaps.length ?? 0) > 0,
   };
@@ -366,7 +365,14 @@ function toConversationView(
       answerPhase: message.answerPhase,
       citations: message.citations.map((citation) => ({
         ...citation,
-        availability: "available" as const,
+        availability: (() => {
+          const owner = deps.repos.generations.byId(citation.generationId);
+          return owner === null
+            ? ("source_missing" as const)
+            : generationProjectState(deps, owner) === "removed"
+              ? ("source_removed" as const)
+              : ("available" as const);
+        })(),
       })),
       selection: message.selection,
       unknownReason: message.unknownReason,
@@ -384,7 +390,7 @@ function toConversationView(
   };
 }
 
-function buildReaderModel(
+async function buildReaderModel(
   deps: AppDeps,
   query: Readonly<Record<string, string>>,
 ) {
@@ -393,6 +399,7 @@ function buildReaderModel(
     return {
       generationId: "" as GenerationId,
       commitSha: "",
+      projectId: (query.project as ProjectId | undefined) ?? null,
       repoDisplayName: "尚无生成版本",
       lessons: [],
       activeLesson: null,
@@ -407,7 +414,24 @@ function buildReaderModel(
     generation.projectId === null
       ? null
       : deps.repos.projects.byId(generation.projectId);
-  const rows = deps.repos.lessons.listByGeneration(generation.generationId);
+  const selectedTopic = query.topic ? requireTopic(deps, query.topic) : null;
+  if (selectedTopic && selectedTopic.generationId !== generation.generationId)
+    throw new LearningError("version_mismatch", "学习主题不属于当前分析版本");
+  const activeTopic = selectedTopic ? toTopicView(deps, selectedTopic) : null;
+  const allTopics = generation.projectId
+    ? deps.repos.topics.listByProject(generation.projectId, {
+        includeDeleted: true,
+      })
+    : deps.repos.topics.listByGeneration(generation.generationId, {
+        includeDeleted: true,
+      });
+  const allRows = deps.repos.lessons.listByGeneration(generation.generationId, {
+    includeDeleted: true,
+  });
+  const rows = allRows.filter((row) => !row.deletedAt);
+  const deletedLessons = allRows
+    .filter((row) => row.deletedAt)
+    .map((row) => toLessonSummary(row, readLessonJson(deps, generation, row)));
   const parsed = rows.map((row) => ({
     row,
     lesson: readLessonJson(deps, generation, row),
@@ -416,26 +440,57 @@ function buildReaderModel(
     toLessonSummary(row, lesson),
   );
   const requestedLesson = query.lesson;
-  const active =
-    (requestedLesson === undefined
-      ? undefined
-      : parsed.find(({ row }) => row.lessonId === requestedLesson)) ??
-    parsed[0];
-  const conversation =
-    query.conversation === undefined || query.conversation === ""
+  if (
+    requestedLesson &&
+    !parsed.some(({ row }) => row.lessonId === requestedLesson)
+  ) {
+    if (deletedLessons.some((lesson) => lesson.lessonId === requestedLesson))
+      throw new LearningError(
+        "source_removed",
+        "这篇讲解已删除，可在学习目录中恢复",
+        { reason: "lesson_deleted", generationId: generation.generationId },
+      );
+    throw new LearningError("version_mismatch", "讲解不属于当前版本");
+  }
+  const active = activeTopic
+    ? undefined
+    : ((requestedLesson === undefined
+        ? undefined
+        : parsed.find(({ row }) => row.lessonId === requestedLesson)) ??
+      parsed[0]);
+  const conversation = activeTopic
+    ? toConversationView(deps, activeTopic.conversationId)
+    : query.conversation === undefined || query.conversation === ""
       ? null
       : toConversationView(deps, query.conversation);
+  if (
+    conversation &&
+    !conversation.generationIds.includes(generation.generationId)
+  )
+    throw new LearningError("version_mismatch", "会话不属于当前版本");
   const readingPosition =
     deps.repos.prefs
       .readingPositions()
-      .find((position) => position.generationId === generation.generationId) ??
-    null;
+      .find(
+        (position) =>
+          position.generationId === generation.generationId &&
+          position.lessonId === active?.row.lessonId,
+      ) ?? null;
+  const source = query.source
+    ? await readSourceView(deps, generation.generationId, query.source as never)
+    : null;
 
   return {
+    projectId: generation.projectId,
+    source,
     generationId: generation.generationId,
     commitSha: generation.commitSha,
     repoDisplayName: project?.displayName ?? generation.repoId,
     lessons: summaries,
+    deletedLessons,
+    topics: allTopics.filter((topic) => !topic.deletedAt),
+    deletedTopics: allTopics.filter((topic) => topic.deletedAt),
+    activeTopic,
     activeLesson: active === undefined ? null : toLessonDetail(active.lesson),
     coverage: readCoverage(deps, generation),
     conversation,
@@ -452,7 +507,11 @@ function resolveProject(
 ): ProjectRecord | null {
   const requested = query.project;
   if (requested !== undefined && requested !== "") {
-    return deps.repos.projects.byId(requested as ProjectId);
+    const project = deps.repos.projects.byId(requested as ProjectId);
+    if (!project) throw new LearningError("not_found", "项目不存在");
+    if (project.deletedAt)
+      throw new LearningError("source_removed", "项目已被移除");
+    return project;
   }
   return deps.repos.projects.list()[0] ?? null;
 }
@@ -475,7 +534,16 @@ function buildInboxModel(
   const page = deps.repos.changes.page(project.projectId, cursor, 20);
   return {
     projectId: project.projectId,
-    items: page.items.map(toChangeSummary),
+    projectName: project.displayName,
+    projects: deps.repos.projects
+      .list()
+      .map(({ projectId, displayName }) => ({ projectId, displayName })),
+    items: page.items.map((item) => ({
+      ...toChangeSummary(item),
+      generationId: item.jobId
+        ? (deps.repos.jobs.byId(item.jobId)?.outputGenerationId ?? null)
+        : null,
+    })),
     next: page.next,
     pollingNote: POLLING_NOTE,
   };
@@ -502,22 +570,28 @@ function buildSettingsModel(
     watch = {
       enabled: false,
       available: false,
-      reason: "本地项目没有远端可轮询，请使用手动刷新。",
+      reason: "本地项目不支持后台轮询。请回到项目页选择新提交并重新分析。",
       lastPollAt: null,
     };
   } else {
-    const latest = deps.repos.changes.page(project.projectId, null, 1).items[0];
     watch = {
       enabled: project.watchEnabled,
       available: true,
       reason: null,
-      lastPollAt: latest?.discoveredAt ?? null,
+      lastPollAt:
+        deps.watch?.lastPollAt(project.projectId) ??
+        deps.repos.cursors?.get(project.repoId, "default_branch", "discovery")
+          ?.lastPollAt ??
+        null,
     };
   }
 
   return {
     projectId: project?.projectId ?? "",
-    model: toModelSettingsView(settings),
+    model: toModelSettingsView(
+      settings,
+      Boolean(loadModelKey(deps.paths, process.env)),
+    ),
     usage: toUsageView(deps.repos.usage.groupByKind(), pricingConfigured),
     storage: computeStorageReport(deps.paths, deps.repos),
     preferences: {
@@ -547,7 +621,7 @@ export function createStaticUi(
 
   return {
     routes: UI_ROUTES,
-    handle(req: RouteRequest): Promise<RouteResponse | null> {
+    async handle(req: RouteRequest): Promise<RouteResponse | null> {
       const pathname = req.params.path ?? "/";
       const pattern = req.params.pattern ?? "";
 
@@ -558,6 +632,7 @@ export function createStaticUi(
         return Promise.resolve(serveAsset(assetDir, assetName));
       }
 
+      const pageCtx = { ...ctx, projectId: req.query.project };
       switch (pathname) {
         case "/":
           return Promise.resolve(
@@ -567,25 +642,25 @@ export function createStaticUi(
         case "/learn/reader":
           return Promise.resolve(
             htmlResponse(
-              renderReaderPage(ctx, buildReaderModel(deps, req.query)),
+              renderReaderPage(ctx, await buildReaderModel(deps, req.query)),
             ),
           );
         case "/inbox":
           return Promise.resolve(
             htmlResponse(
-              renderInboxPage(ctx, buildInboxModel(deps, req.query)),
+              renderInboxPage(pageCtx, buildInboxModel(deps, req.query)),
             ),
           );
         case "/terms":
           return Promise.resolve(
             htmlResponse(
-              renderTermsPage(ctx, { terms: deps.repos.terms.list() }),
+              renderTermsPage(pageCtx, { terms: deps.repos.terms.list() }),
             ),
           );
         case "/settings":
           return Promise.resolve(
             htmlResponse(
-              renderSettingsPage(ctx, buildSettingsModel(deps, req.query)),
+              renderSettingsPage(pageCtx, buildSettingsModel(deps, req.query)),
             ),
           );
         default:

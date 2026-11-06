@@ -12,6 +12,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 
 import { z } from "zod";
+import { splitFrontmatter } from "../../okf/frontmatter.js";
 
 import { LearningError, sourceIdOf } from "../contracts/index.js";
 import type {
@@ -82,7 +83,10 @@ const FORBIDDEN_METHODS = new Set([
   "fetch",
 ]);
 
-function invalid(message: string, details?: Record<string, unknown>): LearningError {
+function invalid(
+  message: string,
+  details?: Record<string, unknown>,
+): LearningError {
   return new LearningError("invalid_input", message, details);
 }
 
@@ -100,7 +104,11 @@ function safePagePath(root: string, page: string): string {
   }
   const candidate = path.resolve(root, `${page}.md`);
   const relative = path.relative(root, candidate);
-  if (relative === "" || relative === ".." || relative.startsWith(`..${path.sep}`)) {
+  if (
+    relative === "" ||
+    relative === ".." ||
+    relative.startsWith(`..${path.sep}`)
+  ) {
     throw invalid("页面路径越界", { page });
   }
   return candidate;
@@ -221,7 +229,9 @@ function toolDefs(): QaToolDef[] {
         for (const hit of hits) {
           const sourceId = wikiSourceId(ctx.generation.generationId, hit.page);
           citations.push(sourceId);
-          parts.push(`[来源: ${sourceId}] ${hit.page}\n${snippet(hit.text)}`);
+          parts.push(
+            `[来源: ${sourceId}] ${hit.page}\n${snippet(splitFrontmatter(hit.text).body)}`,
+          );
         }
         return Promise.resolve({ content: parts.join("\n\n"), citations });
       },
@@ -239,7 +249,7 @@ function toolDefs(): QaToolDef[] {
         const { page } = parsed.data;
         const text = readWikiPage(ctx, page);
         return Promise.resolve({
-          content: text,
+          content: splitFrontmatter(text).body,
           citations: [wikiSourceId(ctx.generation.generationId, page)],
         });
       },
@@ -357,11 +367,15 @@ export function assertNoWriteTools(tools: { name: string }[]): void {
       throw new LearningError("internal_error", "工具缺少名称", { tool });
     }
     if (FORBIDDEN_TOOL_NAME.test(name) || !allowed.has(name)) {
-      throw new LearningError("internal_error", "工具不在只读白名单内", { name });
+      throw new LearningError("internal_error", "工具不在只读白名单内", {
+        name,
+      });
     }
     const candidate = tool as unknown as Record<string, unknown>;
     if ("readOnly" in candidate && candidate.readOnly !== true) {
-      throw new LearningError("internal_error", "工具必须声明 readOnly", { name });
+      throw new LearningError("internal_error", "工具必须声明 readOnly", {
+        name,
+      });
     }
     for (const key of Object.keys(candidate)) {
       if (FORBIDDEN_METHODS.has(key) && typeof candidate[key] === "function") {

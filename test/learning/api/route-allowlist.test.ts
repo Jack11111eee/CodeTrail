@@ -12,7 +12,7 @@ import type {
 } from "../../../src/learning/contracts/index.ts";
 
 /**
- * The route table must equal PRD §5 entry for entry (AC-API-01, AC-SCOPE-01).
+ * The route table contains PRD §5 plus the model connectivity test.
  *
  * The expected list is written out independently of `ROUTES` and compared in
  * order; the DTO table in architecture §3.8 has the same sequence, so a
@@ -35,8 +35,15 @@ const SECTION_14_1_ORDER: readonly (readonly [string, string])[] = [
   ["POST", "/api/jobs/:id/retry"],
   ["GET", "/api/generations/:id/lessons"],
   ["GET", "/api/generations/:id/lessons/:lessonId"],
+  ["DELETE", "/api/generations/:id/lessons/:lessonId"],
+  ["POST", "/api/generations/:id/lessons/:lessonId/restore"],
   ["GET", "/api/generations/:id/sources/:sourceId"],
   ["GET", "/api/generations/:id/coverage"],
+  ["POST", "/api/generations/:id/topics"],
+  ["GET", "/api/topics/:id"],
+  ["POST", "/api/topics/:id/messages"],
+  ["DELETE", "/api/topics/:id"],
+  ["POST", "/api/topics/:id/restore"],
   ["POST", "/api/conversations"],
   ["GET", "/api/conversations/:id"],
   ["GET", "/api/conversations/:id/messages"],
@@ -50,6 +57,7 @@ const SECTION_14_1_ORDER: readonly (readonly [string, string])[] = [
   ["GET", "/api/terms/:id"],
   ["GET", "/api/settings/model"],
   ["PUT", "/api/settings/model"],
+  ["POST", "/api/settings/model/test"],
   ["GET", "/api/usage"],
   ["GET", "/api/storage"],
 ];
@@ -57,9 +65,9 @@ const SECTION_14_1_ORDER: readonly (readonly [string, string])[] = [
 const routePairs = (): string[] =>
   ROUTES.map((route) => `${route.method} ${route.pattern}`);
 
-describe("ROUTES equals the §14.1 / PRD §5 set", () => {
-  it("has exactly 32 entries", () => {
-    expect(ROUTES).toHaveLength(32);
+describe("ROUTES equals the expected API set", () => {
+  it("has exactly 40 entries", () => {
+    expect(ROUTES).toHaveLength(40);
   });
 
   it("matches the ordered (method, pattern) list entry for entry", () => {
@@ -75,7 +83,7 @@ describe("ROUTES equals the §14.1 / PRD §5 set", () => {
     );
     for (const pair of expected) expect(actual.has(pair)).toBe(true);
     for (const pair of actual) expect(expected.has(pair)).toBe(true);
-    expect(actual.size).toBe(32);
+    expect(actual.size).toBe(40);
   });
 
   it("makes only health and bootstrap public", () => {

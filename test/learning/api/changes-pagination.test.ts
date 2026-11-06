@@ -604,6 +604,6 @@ describe("module registration", () => {
       ["watch.put", "changes.list", "changes.get"].includes(route.handler),
     ).map((route) => `${route.method} ${route.pattern} ${route.handler}`);
     expect(mine).toEqual(frozen);
-    expect(ROUTES).toHaveLength(32);
+    expect(ROUTES).toHaveLength(40);
   });
 });

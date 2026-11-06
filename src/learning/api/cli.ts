@@ -224,6 +224,7 @@ export async function createAppDeps(env: NodeJS.ProcessEnv): Promise<AppDeps> {
     { createSessionStore },
     { createModelHandle },
     { loadCredential },
+    { loadModelKey },
     { resolveEnv },
   ] = await Promise.all([
     import("../config/paths.js"),
@@ -243,6 +244,7 @@ export async function createAppDeps(env: NodeJS.ProcessEnv): Promise<AppDeps> {
     import("./auth.js"),
     import("../config/model.js"),
     import("../config/credentials.js"),
+    import("../config/model-credentials.js"),
     import("../config/env.js"),
   ]);
 
@@ -258,9 +260,12 @@ export async function createAppDeps(env: NodeJS.ProcessEnv): Promise<AppDeps> {
     const repos = createRepositories(db);
 
     // ── model: absent settings mean "reads work, generation asks for setup"
-    const settings = repos.settings.model();
-    const model: ModelHandle | null =
-      settings === null ? null : createModelHandle(settings, env);
+    const currentModel = (): ModelHandle | null => {
+      const settings = repos.settings.model();
+      return settings === null
+        ? null
+        : createModelHandle(settings, env, loadModelKey(paths, env));
+    };
 
     // ── snapshot / publish / jobs
     const snapshotService = createSnapshotService({ paths, repos, clock });
@@ -282,7 +287,26 @@ export async function createAppDeps(env: NodeJS.ProcessEnv): Promise<AppDeps> {
       publisher,
       upstream: createUpstreamGenerationPort(),
       lessons: createChangeLessonBuilder(),
-      model,
+      modelForConfig: (config) => {
+        const settings = repos.settings.model();
+        if (!settings) throw new Error("model is not configured");
+        return createModelHandle(
+          {
+            ...settings,
+            ...config.model,
+            baseUrl: config.model.baseUrl ?? null,
+          },
+          {
+            ...env,
+            CODETRAIL_MODEL_PROVIDER: config.model.provider,
+            CODETRAIL_MODEL_ID: config.model.model,
+          },
+          loadModelKey(paths, env),
+        );
+      },
+      get model() {
+        return currentModel();
+      },
       usage,
       registry,
       external,
@@ -300,7 +324,9 @@ export async function createAppDeps(env: NodeJS.ProcessEnv): Promise<AppDeps> {
       db,
       repos,
       clock,
-      model,
+      get model() {
+        return currentModel();
+      },
       retriever,
       registry,
       snapshotService,
@@ -352,7 +378,9 @@ export async function createAppDeps(env: NodeJS.ProcessEnv): Promise<AppDeps> {
       answers,
       registry,
       external,
-      model,
+      get model() {
+        return currentModel();
+      },
       session,
       removal,
       usage,
@@ -381,6 +409,7 @@ const ROUTE_MODULES: readonly (() => Promise<RouteModule>)[] = [
     import("./routes/conversations.js").then(
       (module) => module.conversationsModule,
     ),
+  () => import("./routes/topics.js").then((module) => module.topicsRoutes),
   () => import("./routes/prefs.js").then((module) => module.prefsModule),
   () => import("./routes/terms.js").then((module) => module.termsModule),
   () => import("./routes/settings.js").then((module) => module.settingsModule),
@@ -443,6 +472,8 @@ async function createBootLogger(
       import("node:path"),
     ]);
 
+  const { loadModelKey: readModelKey } =
+    await import("../config/model-credentials.js");
   const secrets: string[] = [];
   const envToken = env.CODETRAIL_GITHUB_TOKEN;
   if (typeof envToken === "string" && envToken !== "") secrets.push(envToken);
@@ -462,7 +493,16 @@ async function createBootLogger(
   return createJsonLogger({
     file: join(deps.paths.logs, "codetrail.jsonl"),
     clock: deps.clock,
-    redact: (text: string) => redactSecrets(text, secrets),
+    redact: (text: string) => {
+      // Settings can rotate a model key without restarting the listener.
+      let modelKey: string | undefined;
+      try {
+        modelKey = readModelKey(deps.paths, env);
+      } catch {
+        /* Keep logging without exposing corrupt credentials. */
+      }
+      return redactSecrets(text, [...secrets, ...(modelKey ? [modelKey] : [])]);
+    },
   });
 }
 
@@ -547,6 +587,7 @@ export async function main(argv: readonly string[]): Promise<void> {
     // observe a half-recovered database (AC-OPS-02).
     await deps.jobRunner.recoverInterrupted();
     deps.repos.conversations.cancelStreaming();
+    deps.repos.topics.recoverInterrupted(deps.clock.now().toISOString());
 
     await registerRouteModules();
     await assertEveryRouteResolves();
