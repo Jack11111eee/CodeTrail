@@ -1154,10 +1154,3 @@ function stringArray(value: unknown): string[] {
     ? value.filter((item): item is string => typeof item === "string")
     : [];
 }
-
-/** The same heading anchors used by search/read, for immutable citation lookup. */
-export function wikiHeadingAnchors(markdown: string): string[] {
-  return headingSections(marked.lexer(markdown)).map(
-    (section) => section.anchor,
-  );
-}

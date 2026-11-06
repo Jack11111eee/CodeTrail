@@ -1,7 +1,7 @@
 import { readFileSync, readdirSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { splitFrontmatter } from "../../okf/frontmatter.js";
-import { wikiHeadingAnchors } from "../../retrieval/wiki.js";
+import { wikiHeadingAnchors } from "../../okf/heading-anchors.js";
 import { sourceIdOf } from "../contracts/index.js";
 import type { GenerationId, SourceId } from "../contracts/index.js";
 
