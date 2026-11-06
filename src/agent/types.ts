@@ -20,6 +20,10 @@ export interface RepositoryGenerationProgressEvent {
    * Current native repository-generation lifecycle stage.
    */
   stage: "planning" | "generating" | "finalizing" | "replanning" | "noop";
+  /** Short host-authored activity description, never model narration. */
+  message?: string;
+  /** Safe diagnostic category for one deferred page. */
+  failure?: { code: string; message: string };
 
   /**
    * Whether this stage is continuing a previously interrupted durable run.
@@ -55,6 +59,9 @@ export interface RepositoryGenerationProgressEvent {
    * @default undefined outside page generation
    */
   completedCount?: number;
+  /** Pages durably submitted, excluding failed/deferred workers. */
+  successfulCount?: number;
+  skippedCount?: number;
 
   /**
    * Canonical pages currently owned by in-flight workers, in start order.

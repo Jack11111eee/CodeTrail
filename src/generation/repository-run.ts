@@ -628,9 +628,14 @@ export async function beginRepositoryRun(
  * Matches both the standard `"file_not_found"` error code used by some backends
  * and the human-readable `"Error: File '...' not found"` string returned by
  * DeepAgents' filesystem backends (see #765).
+ * Missing parent directories can instead be returned as a wrapped Node ENOENT.
  */
 function isNotFoundBackendError(error: string): boolean {
-  return error === "file_not_found" || error.includes("not found");
+  return (
+    error === "file_not_found" ||
+    error.includes("not found") ||
+    /\bENOENT:\s+no such file or directory\b/u.test(error)
+  );
 }
 
 /**
@@ -1624,6 +1629,7 @@ export async function finishRepositoryRun(
   run: ActiveRepositoryRun,
   options: {
     skippedPageSnapshots?: readonly RepositoryPageSnapshot[];
+    beforeCheckpointRemoval?: () => Promise<void>;
     onEvent?: (event: OpenWikiRunEvent) => void;
   } = {},
 ): Promise<{ status: "complete"; sourceChanged?: true }> {
@@ -1754,6 +1760,8 @@ export async function finishRepositoryRun(
     );
   }
 
+  // The host commits its next-stage checkpoint before this one is removed.
+  await options.beforeCheckpointRemoval?.();
   // Delete this LAST. If anything above fails, begin() can reconstruct and retry.
   await removeRepositoryRunState(run.root);
 

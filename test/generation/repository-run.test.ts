@@ -538,6 +538,53 @@ test("tolerates a human-readable not-found error from the backend when skipping 
   expect(run.state.plan?.pages[0]?.status).toBe("skipped");
 });
 
+test("restores and skips a never-written nested page whose parent directory does not exist", async () => {
+  const root = await createRepository();
+  const run = await beginForcedUpdate(root);
+  const page = "/openwiki/architecture/core-and-adapters.md";
+  await submitRepositoryPlan(run, {
+    pages: [
+      {
+        path: page,
+        title: "Core and adapters",
+        purpose: "Document the core boundary.",
+      },
+    ],
+  });
+  const next = await nextRepositoryPage(run);
+  if (next.status !== "pending") throw new Error("Expected pending page.");
+  const snapshot = await captureRepositoryPageSnapshot(run, next.job.id);
+  expect(snapshot.markdown).toBeNull();
+  await expect(restoreRepositoryPage(run, snapshot)).resolves.toBeUndefined();
+  expect(run.state.plan?.pages[0]?.status).toBe("pending");
+  await expect(skipRepositoryPage(run, snapshot)).resolves.toBeUndefined();
+  expect(run.state.plan?.pages[0]?.status).toBe("skipped");
+  await expect(
+    readFile(path.join(root, "openwiki/architecture/core-and-adapters.md")),
+  ).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+test("does not treat permission failures as absent pages during rollback", async () => {
+  const root = await createRepository();
+  const run = await beginForcedUpdate(root);
+  const page = "/openwiki/architecture/permissions.md";
+  await submitRepositoryPlan(run, {
+    pages: [
+      { path: page, title: "Permissions", purpose: "Document permissions." },
+    ],
+  });
+  const next = await nextRepositoryPage(run);
+  if (next.status !== "pending") throw new Error("Expected pending page.");
+  const snapshot = await captureRepositoryPageSnapshot(run, next.job.id);
+  vi.spyOn(run.backend, "delete").mockResolvedValue({
+    error: "EACCES: permission denied",
+  });
+  await expect(restoreRepositoryPage(run, snapshot)).rejects.toThrow(
+    "permission denied",
+  );
+  expect(run.state.plan?.pages[0]?.status).toBe("pending");
+});
+
 beforeEach(() => {
   failureHarness.manifestReplacements = 0;
   failureHarness.manifestWrites = 0;
