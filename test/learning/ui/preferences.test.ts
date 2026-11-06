@@ -34,7 +34,7 @@ describe("preferences", () => {
     const html = renderSettingsPage(pageContext, settingsModel());
     expect(html).toContain("<form data-preferences-form>");
     expect(html).toContain('<ul class="reading-positions">');
-    expect(html).toContain("data-reading-position-form");
-    expect(html).toContain('name="offset"');
+    expect(html).toContain("自动保存");
+    expect(html).not.toContain('name="offset"');
   });
 });

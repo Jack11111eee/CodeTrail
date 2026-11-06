@@ -897,7 +897,7 @@ describe("phase B — restart", () => {
     expect(page.text).toContain(
       "旧快照在超过预算时会被淘汰，下一次读取会从当前状态重建。",
     );
-    expect(page.text).toContain("偏移 137");
+    expect(page.text).toContain('data-reading-position="137"');
   }, 180_000);
 });
 

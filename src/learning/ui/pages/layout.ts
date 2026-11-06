@@ -10,6 +10,7 @@
 import { escapeAttribute, escapeHtml } from "../render/markdown.js";
 
 export interface PageContext {
+  projectId?: string | null;
   dataRoot: string;
   assetBase: string;
 }
@@ -46,7 +47,9 @@ export function safeAssetBase(value: string | undefined): string {
 /** A stable, human-readable placeholder for a missing timestamp. */
 export function formatTimestamp(value: string | null | undefined): string {
   if (value === null || value === undefined || value === "") return "—";
-  return escapeHtml(value);
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return escapeHtml(value);
+  return `<time datetime="${escapeAttribute(value)}">${escapeHtml(date.toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }))}</time>`;
 }
 
 /** The short form used in cards and badges. */
@@ -82,10 +85,14 @@ export function collapsedDetails(
   );
 }
 
-function nav(active: string): string {
+function nav(active: string, projectId?: string | null): string {
   const links = UI_NAV.map((item) => {
     const current = item.key === active ? ' aria-current="page"' : "";
-    return `<a href="${item.href}"${current}>${escapeHtml(item.label)}</a>`;
+    const href =
+      item.href !== "/" && projectId
+        ? `${item.href}?project=${encodeURIComponent(projectId)}`
+        : item.href;
+    return `<a href="${href}"${current}>${escapeHtml(item.label)}</a>`;
   }).join("");
   return `<nav class="site-nav" aria-label="主导航">${links}</nav>`;
 }
@@ -105,13 +112,15 @@ export function renderPageShell(
     `<!doctype html><html lang="zh"><head><meta charset="utf-8">` +
     `<meta name="viewport" content="width=device-width, initial-scale=1">` +
     `<title>${escapeHtml(title)} · Codetrail</title>` +
+    `<script src="${escapeAttribute(`${assetBase}/theme.js`)}"></script>` +
     `<link rel="stylesheet" href="${escapeAttribute(`${assetBase}/styles.css`)}">` +
     // `tsconfig.client.json` emits an ES module; a classic script would throw a
     // SyntaxError on its top-level `export` and never enhance the page.
     `<script type="module" src="${escapeAttribute(`${assetBase}/client.js`)}" defer></script>` +
     `</head><body data-page="${escapeAttribute(active)}">` +
     `<header class="site-header">` +
-    `<a class="brand" href="/">Codetrail</a>${nav(active)}` +
+    `<a class="brand" href="/">Codetrail</a>${nav(active, ctx.projectId)}` +
+    `<label class="theme-control"><span>外观</span><select data-theme-select aria-label="外观模式"><option value="system">跟随系统</option><option value="light">日间</option><option value="dark">夜间</option></select></label>` +
     `</header>` +
     `<main class="page">${body}</main>` +
     `</body></html>`

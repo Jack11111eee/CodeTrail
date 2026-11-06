@@ -34,14 +34,22 @@ describe("reader layout", () => {
     expect(html).toContain("回答：slugify 先 trim。");
   });
 
-  it("uses the 240px / 1fr / 360px grid", () => {
-    expect(stylesheet).toContain("grid-template-columns: 240px 1fr 360px");
+  it("keeps reading wide and opens a context column only on demand", () => {
+    expect(stylesheet).toMatch(
+      /grid-template-columns:\s*180px minmax\(0,\s*1fr\)/u,
+    );
+    expect(stylesheet).toMatch(
+      /\.reader-grid\[data-reader-panel=["']?qa["']?\]/u,
+    );
+    expect(stylesheet).toMatch(
+      /\.reader-grid\[data-reader-panel=["']?source["']?\]/u,
+    );
   });
 
   it("literally names all three reader regions in the 900px query", () => {
     expect(stylesheet).toContain("@media (max-width: 900px)");
-    expect(stylesheet).toContain(
-      '[data-testid="reader-nav"], [data-testid="reader-lesson"], [data-testid="reader-qa"]',
+    expect(stylesheet).toMatch(
+      /\[data-testid="reader-nav"\],\s*\[data-testid="reader-lesson"\],\s*\[data-testid="reader-qa"\]/u,
     );
     const start = stylesheet.indexOf("@media (max-width: 900px)");
     const block = stylesheet.slice(start, stylesheet.indexOf("}", start) + 1);
