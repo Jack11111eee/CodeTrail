@@ -20,6 +20,7 @@ import type {
   ModelSettings,
 } from "../contracts/index.js";
 import { PROMPT_TEMPLATE_VERSION } from "./defaults.js";
+import { normalizeModelBaseUrl } from "./model-url.js";
 
 export type {
   ChatModelLike,
@@ -62,6 +63,11 @@ interface ScriptedModelModuleLike {
 
 interface ProviderModuleLike {
   ChatAnthropic: new (fields: Record<string, unknown>) => ChatModelLike;
+}
+
+interface ModelTransportOptions {
+  maxRetries?: number;
+  timeout?: number;
 }
 
 const nodeRequire = createRequire(import.meta.url);
@@ -131,10 +137,20 @@ function createFixtureModel(env: NodeJS.ProcessEnv): ChatModelLike {
   });
 }
 
-function createAnthropicModel(settings: ModelSettings): ChatModelLike {
+function createAnthropicModel(
+  settings: ModelSettings,
+  apiKey?: string,
+  transport?: ModelTransportOptions,
+): ChatModelLike {
   const module = loadModule<ProviderModuleLike>("@langchain/anthropic");
   return new module.ChatAnthropic({
     model: settings.model,
+    anthropicApiUrl: settings.baseUrl ?? "https://api.anthropic.com",
+    ...(apiKey ? { apiKey } : {}),
+    // Retry pages at durable boundaries, rather than hiding repeated multi-minute
+    // transport retries inside every model call.
+    maxRetries: transport?.maxRetries ?? 0,
+    clientOptions: { timeout: transport?.timeout ?? 60_000 },
     temperature: settings.temperature,
     maxTokens: settings.maxOutputTokens,
   });
@@ -144,12 +160,14 @@ function createChatModel(
   provider: string,
   settings: ModelSettings,
   env: NodeJS.ProcessEnv,
+  apiKey?: string,
+  transport?: ModelTransportOptions,
 ): ChatModelLike {
   switch (provider) {
     case FIXTURE_PROVIDER:
       return createFixtureModel(env);
     case ANTHROPIC_PROVIDER:
-      return createAnthropicModel(settings);
+      return createAnthropicModel(settings, apiKey, transport);
     default:
       throw new LearningError(
         "invalid_input",
@@ -169,6 +187,8 @@ function createChatModel(
 export function createModelHandle(
   settings: ModelSettings,
   env: NodeJS.ProcessEnv,
+  apiKey?: string,
+  transport?: ModelTransportOptions,
 ): ModelHandle {
   const provider = resolveProvider(settings, env);
   const overrideModelId = env.CODETRAIL_MODEL_ID?.trim();
@@ -176,11 +196,19 @@ export function createModelHandle(
     overrideModelId !== undefined && overrideModelId !== ""
       ? overrideModelId
       : settings.model;
-  const effective: ModelSettings = { ...settings, provider, model: modelId };
+  const baseUrl =
+    normalizeModelBaseUrl(settings.baseUrl) ??
+    normalizeModelBaseUrl(env.ANTHROPIC_API_URL || env.ANTHROPIC_BASE_URL);
+  const effective: ModelSettings = {
+    ...settings,
+    provider,
+    model: modelId,
+    ...(baseUrl ? { baseUrl } : {}),
+  };
   return {
     modelId,
     settings: effective,
-    chat: () => createChatModel(provider, effective, env),
+    chat: () => createChatModel(provider, effective, env, apiKey, transport),
     estimate: (_role: ModelRole, promptTokens: number) => ({
       calls: 1,
       tokens: Math.max(0, Math.trunc(promptTokens)) + settings.maxOutputTokens,

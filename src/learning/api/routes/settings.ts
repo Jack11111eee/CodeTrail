@@ -1,3 +1,6 @@
+import { loadModelKey, saveModelKey } from "../../config/model-credentials.js";
+import { normalizeModelBaseUrl } from "../../config/model-url.js";
+import { testModelConnection } from "../../config/model-connection.js";
 /**
  * Model settings disclosure (architecture §3.8, §4.4, §14.1).
  *
@@ -12,13 +15,14 @@
  * its `dedupe_key`/`cache_key` (Appendix B5).
  */
 
-import { dataSentManifest } from "../../config/model.js";
+import { createModelHandle, dataSentManifest } from "../../config/model.js";
 import type { ModelSettings } from "../../config/model.js";
 import { LearningError, errorMessageFor } from "../../contracts/index.js";
 import type {
   HandlerFactory,
   ModelSettingsView,
   PutModelSettingsRequest,
+  TestModelConnectionRequest,
   RouteDef,
   RouteHandlerKey,
   RouteModule,
@@ -46,6 +50,12 @@ export const routes: RouteDef[] = [
     auth: "session",
     handler: "settings.model.put",
   },
+  {
+    method: "POST",
+    pattern: "/api/settings/model/test",
+    auth: "session",
+    handler: "settings.model.test",
+  },
 ];
 
 /**
@@ -55,10 +65,15 @@ export const routes: RouteDef[] = [
  */
 export function toModelSettingsView(
   settings: ModelSettings | null,
+  apiKeyConfigured = false,
 ): ModelSettingsView {
   return {
+    apiKeyConfigured,
+    maxOutputTokens: settings?.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
+    temperature: settings?.temperature ?? DEFAULT_TEMPERATURE,
     provider: settings?.provider ?? "",
     model: settings?.model ?? "",
+    baseUrl: settings?.baseUrl ?? null,
     pricingConfigured:
       settings?.pricing !== null && settings?.pricing !== undefined,
     quota: {
@@ -76,7 +91,10 @@ const getModelSettings: HandlerFactory = (deps) => () =>
   Promise.resolve({
     kind: "json",
     status: 200,
-    body: toModelSettingsView(deps.repos.settings.model()),
+    body: toModelSettingsView(
+      deps.repos.settings.model(),
+      Boolean(loadModelKey(deps.paths, process.env)),
+    ),
   });
 
 const putModelSettings: HandlerFactory = (deps) => (req) => {
@@ -97,6 +115,10 @@ const putModelSettings: HandlerFactory = (deps) => (req) => {
   const next: ModelSettings = {
     provider: body.provider,
     model: body.model,
+    baseUrl:
+      body.baseUrl === undefined
+        ? (current?.baseUrl ?? null)
+        : (normalizeModelBaseUrl(body.baseUrl) ?? null),
     maxOutputTokens:
       body.maxOutputTokens ??
       current?.maxOutputTokens ??
@@ -119,17 +141,60 @@ const putModelSettings: HandlerFactory = (deps) => (req) => {
     },
   };
 
+  // Validate before persisting so unsupported providers cannot break restart.
+  createModelHandle(next, process.env);
+  if (body.apiKey !== undefined) saveModelKey(deps.paths, body.apiKey);
   deps.repos.settings.putModel(next);
   return Promise.resolve({
     kind: "json",
     status: 200,
-    body: toModelSettingsView(next),
+    body: toModelSettingsView(
+      next,
+      Boolean(loadModelKey(deps.paths, process.env)),
+    ),
   });
+};
+
+const testConnection: HandlerFactory = (deps) => async (req) => {
+  const body = req.body as TestModelConnectionRequest;
+  if (body.provider !== "anthropic") {
+    throw new LearningError(
+      "invalid_input",
+      "连接测试仅用于 Anthropic Messages API 服务；本地测试模型无需网络连接。",
+      { field: "provider" },
+    );
+  }
+  const key = body.apiKey?.trim() || loadModelKey(deps.paths, process.env);
+  if (!key)
+    throw new LearningError(
+      "model_not_configured",
+      "请输入 API Key，或先配置本机凭据。",
+      { field: "apiKey" },
+    );
+  const current = deps.repos.settings.model();
+  const probe: ModelSettings = {
+    provider: body.provider,
+    model: body.model,
+    baseUrl:
+      body.baseUrl === undefined
+        ? (current?.baseUrl ?? null)
+        : (normalizeModelBaseUrl(body.baseUrl) ?? null),
+    maxOutputTokens: 16,
+    temperature: 0,
+    pricing: null,
+    quota: EMPTY_QUOTA,
+  };
+  return {
+    kind: "json",
+    status: 200,
+    body: await testModelConnection(probe, key, process.env, req.signal),
+  };
 };
 
 export const handlers: Partial<Record<RouteHandlerKey, HandlerFactory>> = {
   "settings.model.get": getModelSettings,
   "settings.model.put": putModelSettings,
+  "settings.model.test": testConnection,
 };
 
 export const settingsModule: RouteModule = {
