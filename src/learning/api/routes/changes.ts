@@ -10,7 +10,7 @@
  *   `{discovered,enqueued,gaps}` counters. Local projects have no remote to
  *   poll and are refused with `watch_requires_github` (400); a refresh of a
  *   disabled watch is `409 conflict`. Manual refresh is a body field, not a
- *   route, so the frozen 32-entry table in `router.ts` stays intact.
+ *   route, so it does not add an endpoint to `router.ts`.
  * - `GET /api/projects/:id/changes` pages the inbox with an opaque keyset
  *   cursor (`ChangesRepo.page`). It never filters by `state` or
  *   `significance`: every stored event is reachable, because a paging bug that

@@ -1,3 +1,4 @@
+import { lessonTitle } from "../../lessons/title.js";
 /**
  * Generation, comparison and change pipelines (architecture §7.2, §7.5, §12).
  *
@@ -11,13 +12,14 @@
  * for every completed call and rejects once the job's signal is aborted.
  */
 
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   chmod,
   lstat,
   mkdir,
   readFile,
   readdir,
+  rename,
   rm,
   writeFile,
 } from "node:fs/promises";
@@ -36,7 +38,6 @@ import type {
   BuildChangeLessonInput,
   BuildComparisonLessonInput,
   BuildLessonsInput,
-  ChatModelLike,
   ComparisonPayload,
   CoverageReport,
   DiffEntry,
@@ -60,7 +61,6 @@ import type {
 } from "../../contracts/index.js";
 import {
   LESSON_PIPELINE_VERSION,
-  MODEL_CONCURRENCY,
   PROMPT_TEMPLATE_VERSION,
   UPSTREAM_VERSION,
 } from "../../config/defaults.js";
@@ -73,13 +73,14 @@ import {
   ensureBuildWorktree,
   removeBuildWorktree,
 } from "../../projects/worktree.js";
+import { materializeBaseline, planBaseline } from "../../upstream/baseline.js";
 import {
-  materializeBaseline,
-  planBaseline,
-} from "../../upstream/baseline.js";
-import type {
-  PublishGenerationExtras,
-} from "./publish.js";
+  documentHashes,
+  readCheckpoint,
+  writeCheckpoint,
+  type GenerationCheckpoint,
+} from "./checkpoint.js";
+import type { PublishGenerationExtras } from "./publish.js";
 
 /** Thrown when the job's abort signal fires; the runner turns it into `cancelled`. */
 export class JobAbortedError extends Error {
@@ -95,246 +96,12 @@ function checkAborted(signal: AbortSignal): void {
   if (signal.aborted) throw new JobAbortedError();
 }
 
-// ── model concurrency gate (§20) ────────────────────────────────────────────
-
-/** Per-role permits: one repo job, one page worker and one QA slot (§20). */
-const ROLE_PERMITS: Readonly<Record<ModelRole, number>> = Object.freeze({
-  repo_job: 1,
-  page_worker: 1,
-  lesson: 1,
-  qa: 1,
-  change: 1,
-});
-
-export interface ModelGate {
-  run<T>(role: ModelRole, task: () => Promise<T>): Promise<T>;
-  active(): number;
-  maxActive(): number;
-  activeFor(role: ModelRole): number;
-  maxActiveFor(role: ModelRole): number;
-}
-
-/**
- * Global concurrency is `MODEL_CONCURRENCY` (2) with at most one permit per
- * role. A permit is released in `finally`, including on abort.
- */
-export function createModelGate(): ModelGate {
-  let active = 0;
-  let maxActive = 0;
-  const activeByRole: Partial<Record<ModelRole, number>> = {};
-  const maxByRole: Partial<Record<ModelRole, number>> = {};
-  const waiters: (() => void)[] = [];
-
-  const canAcquire = (role: ModelRole): boolean =>
-    active < MODEL_CONCURRENCY &&
-    (activeByRole[role] ?? 0) < (ROLE_PERMITS[role] ?? 1);
-
-  const wake = (): void => {
-    for (const resolve of waiters.splice(0)) resolve();
-  };
-
-  const acquire = async (role: ModelRole): Promise<void> => {
-    while (!canAcquire(role)) {
-      await new Promise<void>((resolve) => waiters.push(resolve));
-    }
-    active += 1;
-    activeByRole[role] = (activeByRole[role] ?? 0) + 1;
-    maxActive = Math.max(maxActive, active);
-    maxByRole[role] = Math.max(maxByRole[role] ?? 0, activeByRole[role] ?? 0);
-  };
-
-  const release = (role: ModelRole): void => {
-    active -= 1;
-    activeByRole[role] = Math.max(0, (activeByRole[role] ?? 0) - 1);
-    wake();
-  };
-
-  return {
-    async run<T>(role: ModelRole, task: () => Promise<T>): Promise<T> {
-      await acquire(role);
-      try {
-        return await task();
-      } finally {
-        release(role);
-      }
-    },
-    active: () => active,
-    maxActive: () => maxActive,
-    activeFor: (role) => activeByRole[role] ?? 0,
-    maxActiveFor: (role) => maxByRole[role] ?? 0,
-  };
-}
-
-// ── usage / quota instrumentation ───────────────────────────────────────────
-
-function estimateTokens(value: unknown): number {
-  const text = typeof value === "string" ? value : JSON.stringify(value ?? "");
-  return Math.max(0, Math.ceil(text.length / 4));
-}
-
-function contentText(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-  return content
-    .map((block) => {
-      if (typeof block === "string") return block;
-      if (
-        block !== null &&
-        typeof block === "object" &&
-        typeof (block as { text?: unknown }).text === "string"
-      ) {
-        return (block as { text: string }).text;
-      }
-      return "";
-    })
-    .join("");
-}
-
-function tokensOf(result: unknown, args: unknown[]): {
-  input: number;
-  output: number;
-} {
-  if (result !== null && typeof result === "object") {
-    const usage = (result as { usage_metadata?: Record<string, unknown> })
-      .usage_metadata;
-    if (usage !== undefined) {
-      const input = Number(usage.input_tokens ?? 0);
-      const output = Number(usage.output_tokens ?? 0);
-      if (input > 0 || output > 0) return { input, output };
-    }
-    const metadata = (result as { response_metadata?: Record<string, unknown> })
-      .response_metadata;
-    const tokenUsage = metadata?.tokenUsage as
-      | Record<string, unknown>
-      | undefined;
-    if (tokenUsage !== undefined) {
-      const input = Number(
-        tokenUsage.promptTokens ?? tokenUsage.inputTokens ?? 0,
-      );
-      const output = Number(
-        tokenUsage.completionTokens ?? tokenUsage.outputTokens ?? 0,
-      );
-      if (input > 0 || output > 0) return { input, output };
-    }
-    return {
-      input: estimateTokens(args),
-      output: estimateTokens(contentText((result as { content?: unknown }).content)),
-    };
-  }
-  return { input: estimateTokens(args), output: 0 };
-}
-
-function costCentsFor(
-  model: ModelHandle,
-  inputTokens: number,
-  outputTokens: number,
-): number | null {
-  const pricing = model.settings.pricing;
-  if (pricing === null) return null;
-  return Math.round(
-    (inputTokens / 1_000_000) * pricing.inputCentsPerMTok +
-      (outputTokens / 1_000_000) * pricing.outputCentsPerMTok,
-  );
-}
-
-interface MeterOptions {
-  kind: UsageKind;
-  jobId: JobRecord["jobId"];
-  role: ModelRole;
-  signal: AbortSignal;
-  gate: ModelGate;
-  usage: JobRunnerDeps["usage"];
-}
-
-function boundMember(target: object, prop: string | symbol): unknown {
-  const value: unknown = Reflect.get(target, prop, target);
-  return typeof value === "function"
-    ? (value as (...args: unknown[]) => unknown).bind(target)
-    : value;
-}
-
-function instrumentChat(
-  base: ChatModelLike,
-  model: ModelHandle,
-  options: MeterOptions,
-): ChatModelLike {
-  const invoke = async (target: object, args: unknown[]): Promise<unknown> => {
-    checkAborted(options.signal);
-    const estimate = model.estimate(options.role, 1_000);
-    const allowed = options.usage.canSpend({
-      kind: options.kind,
-      estimatedCalls: 1,
-      estimatedInputTokens: estimate.tokens,
-      estimatedOutputTokens: model.settings.maxOutputTokens,
-    });
-    if (!allowed) {
-      throw new LearningError("budget_exhausted", "模型配额已用尽", {
-        kind: options.kind,
-      });
-    }
-    const callable = target as {
-      invoke: (...a: never[]) => Promise<unknown>;
-    };
-    const result = await options.gate.run(options.role, () =>
-      callable.invoke(...(args as never[])),
-    );
-    // Record before checking the abort signal: a call that completed while a
-    // cancellation was in flight still consumed tokens (AC-GEN-03).
-    const { input, output } = tokensOf(result, args);
-    options.usage.record({
-      kind: options.kind,
-      jobId: options.jobId,
-      conversationId: null,
-      provider: model.settings.provider,
-      model: model.settings.model,
-      inputTokens: input,
-      outputTokens: output,
-      calls: 1,
-      costCents: costCentsFor(model, input, output),
-    });
-    checkAborted(options.signal);
-    return result;
-  };
-
-  const wrapRunnable = (bound: object): object =>
-    new Proxy(bound, {
-      get(target, prop) {
-        if (prop === "invoke") {
-          return (...args: unknown[]) => invoke(target, args);
-        }
-        if (prop === "stream") {
-          return (...args: unknown[]) => invoke(target, args);
-        }
-        return boundMember(target, prop);
-      },
-    });
-
-  return new Proxy(base, {
-    get(target, prop) {
-      if (prop === "invoke" || prop === "stream") {
-        return (...args: unknown[]) => invoke(target, args);
-      }
-      if (prop === "bindTools") {
-        return (...args: unknown[]) => {
-          const bind = Reflect.get(target, "bindTools", target) as (
-            ...a: unknown[]
-          ) => object;
-          return wrapRunnable(bind.apply(target, args));
-        };
-      }
-      return boundMember(target, prop);
-    },
-  });
-}
-
-function meteredHandle(model: ModelHandle, options: MeterOptions): ModelHandle {
-  return {
-    modelId: model.modelId,
-    settings: model.settings,
-    estimate: (role, promptTokens) => model.estimate(role, promptTokens),
-    chat: () => instrumentChat(model.chat(), model, options),
-  };
-}
+export { createModelGate } from "../../config/metered-model.js";
+export type { ModelGate } from "../../config/metered-model.js";
+import { meteredHandle } from "../../config/metered-model.js";
+import type { ModelGate } from "../../config/metered-model.js";
+import { upstreamProgress } from "./progress.js";
+import type { JobProgress } from "../../contracts/job.js";
 
 function usageKindFor(job: JobRecord): UsageKind {
   switch (job.kind) {
@@ -458,6 +225,7 @@ function defaultConfig(repos: Repositories): GenerationConfig {
       ? {
           provider: settings.provider,
           model: settings.model,
+          ...(settings.baseUrl ? { baseUrl: settings.baseUrl } : {}),
           maxOutputTokens: settings.maxOutputTokens,
           temperature: settings.temperature,
         }
@@ -480,10 +248,79 @@ async function prepareBuildTree(
   job: JobRecord,
   sha: string,
   snapshot: SnapshotRecord,
-): Promise<void> {
-  // A retry after a crash may find a half-sealed staging tree; start clean.
-  await removeBuildWorktree(deps.paths, job.jobId).catch(() => undefined);
+  identity: string,
+): Promise<{ checkpoint: GenerationCheckpoint; resumed: boolean }> {
   const workspace = deps.publisher.buildWorkspace(job.jobId);
+  let checkpoint = await readCheckpoint(workspace.stagingDir);
+  // Adopt a pre-checkpoint-version native run only for this same immutable job.
+  if (!checkpoint && job.attempt > 1) {
+    try {
+      const native = JSON.parse(
+        await readFile(
+          path.join(workspace.treeDir, "openwiki/.run.json"),
+          "utf8",
+        ),
+      ) as { targetGitHead?: string; mode?: string; language?: string };
+      if (
+        native.targetGitHead === sha &&
+        job.payload.kind === "generation" &&
+        native.mode === job.payload.mode &&
+        native.language === "zh"
+      )
+        checkpoint = {
+          version: 1,
+          identity,
+          commitSha: sha,
+          baselineFromGenerationId: null,
+          fallbackReason: null,
+        };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+  if (
+    checkpoint &&
+    checkpoint.identity === identity &&
+    checkpoint.commitSha === sha &&
+    (await exists(workspace.treeDir))
+  ) {
+    if (
+      checkpoint.documents &&
+      JSON.stringify(
+        await documentHashes(path.join(workspace.treeDir, "openwiki")),
+      ) !== JSON.stringify(checkpoint.documents)
+    )
+      throw new LearningError(
+        "source_drift",
+        "已完成文档的断点校验失败；文件已保留，未重新生成",
+      );
+    // A seal/rename may have made the derived tree read-only. Preserve it, then
+    // reconstruct it from the completed document and lesson boundaries.
+    if (await exists(workspace.knowledgeDir))
+      await rename(
+        workspace.knowledgeDir,
+        path.join(
+          workspace.stagingDir,
+          `knowledge-before-retry-${randomUUID()}`,
+        ),
+      );
+    await mkdir(workspace.lessonsDir, { recursive: true, mode: 0o700 });
+    await writeCheckpoint(workspace.stagingDir, checkpoint);
+    return { checkpoint, resumed: true };
+  }
+  // Incompatible state is archived, never silently thrown away on retry.
+  if (await exists(workspace.stagingDir))
+    await rename(
+      workspace.stagingDir,
+      `${workspace.stagingDir}.saved-${randomUUID()}`,
+    );
+  checkpoint = {
+    version: 1,
+    identity,
+    commitSha: sha,
+    baselineFromGenerationId: null,
+    fallbackReason: null,
+  };
   await mkdir(workspace.stagingDir, { recursive: true, mode: 0o700 });
   await mkdir(workspace.knowledgeDir, { recursive: true, mode: 0o700 });
   await mkdir(workspace.lessonsDir, { recursive: true, mode: 0o700 });
@@ -501,12 +338,15 @@ async function prepareBuildTree(
       sha,
       job.jobId,
     );
-    return;
+    await writeCheckpoint(workspace.stagingDir, checkpoint);
+    return { checkpoint, resumed: false };
   }
   // Tests and read-only snapshots without a local mirror: the immutable
   // snapshot is the source of truth, so a copy is byte-identical.
   await copyTree(snapshot.worktreePath, workspace.treeDir);
   await chmod(workspace.treeDir, 0o755).catch(() => undefined);
+  await writeCheckpoint(workspace.stagingDir, checkpoint);
+  return { checkpoint, resumed: false };
 }
 
 function lessonRows(
@@ -524,7 +364,7 @@ function lessonRows(
       lessonId: lesson.lessonId,
       generationId,
       kind: lesson.kind,
-      title: scenarioId,
+      title: lessonTitle(scenarioId, lesson.kind, lesson),
       relPath,
       jsonSha256,
       publishedAt: at,
@@ -646,7 +486,7 @@ async function diffBetween(
   }
   const entries: DiffEntry[] = [];
   const fields = result.stdout.split("\0").filter((field) => field !== "");
-  for (let index = 0; index < fields.length; ) {
+  for (let index = 0; index < fields.length;) {
     const status = statusOf(fields[index]);
     index += 1;
     if (status === null) continue;
@@ -673,6 +513,17 @@ export interface ExecuteJobInput {
   job: JobRecord;
   signal: AbortSignal;
   gate: ModelGate;
+  onProgress?: (progress: JobProgress) => void;
+}
+
+function report(
+  input: ExecuteJobInput,
+  phase: JobProgress["phase"],
+  message: string,
+  extra: Partial<JobProgress> = {},
+): void {
+  checkAborted(input.signal);
+  input.onProgress?.({ phase, done: 0, total: null, message, ...extra });
 }
 
 export interface ExecuteJobResult {
@@ -699,13 +550,18 @@ export async function executeJob(
   }
 }
 
-function requireModel(deps: JobRunnerDeps): ModelHandle {
+function requireModel(
+  deps: JobRunnerDeps,
+  config?: GenerationConfig,
+): ModelHandle {
   if (deps.model === null) {
     throw new LearningError("model_not_configured", "模型尚未配置", {
       reason: "no_model",
     });
   }
-  return deps.model;
+  return config && deps.modelForConfig
+    ? deps.modelForConfig(config)
+    : deps.model;
 }
 
 function repoIdentityOf(deps: JobRunnerDeps, job: JobRecord): string {
@@ -722,6 +578,14 @@ function cacheKeyFor(
   config: GenerationConfig,
 ): string {
   return computeCacheKey({
+    kind:
+      job.kind === "comparison"
+        ? "comparison"
+        : job.kind === "change_analysis"
+          ? "change"
+          : "research",
+    comparisonBaseSha:
+      job.payload.kind === "comparison" ? job.payload.baseSha : null,
     repoIdentity: repoIdentityOf(deps, job),
     targetCommitSha,
     baseContextSha,
@@ -738,10 +602,12 @@ async function runGeneration(
 ): Promise<ExecuteJobResult> {
   const { deps, job, signal, gate } = input;
   const payload = job.payload as GenerationPayload;
-  const model = requireModel(deps);
+  const model = requireModel(deps, payload.config);
 
-  const sha = await deps.snapshotService.resolve(job.repoId, payload.ref);
+  report(input, "resolving", "正在解析目标提交");
+  const sha = await deps.snapshotService.resolve(job.repoId, payload.commitSha);
   checkAborted(signal);
+  report(input, "snapshot", "正在准备代码快照", { commitSha: sha });
   const snapshot = await deps.snapshotService.ensure(job.repoId, sha);
   const scope = normalizeScope(payload.scope);
   const config = payload.config;
@@ -758,29 +624,37 @@ async function runGeneration(
   const cached = deps.repos.generations.byCacheKey(cacheKey);
   if (cached !== null && cached.status === "published") {
     // Cache hit: zero model calls, no staging directory (AC-GEN-08).
+    report(input, "publishing", "命中已发布缓存，复用已有讲解", {
+      cacheHit: true,
+    });
     return { generationId: cached.generationId };
   }
 
   const usageKind = usageKindFor(job);
   assertBudgetAvailable(deps, model, usageKind, "repo_job");
 
-  await prepareBuildTree(deps, job, sha, snapshot);
+  const { checkpoint, resumed } = await prepareBuildTree(
+    deps,
+    job,
+    sha,
+    snapshot,
+    generationId,
+  );
   checkAborted(signal);
   const workspace = deps.publisher.buildWorkspace(job.jobId);
 
   // Baseline (§6.4): reuse a compatible previous generation or record why not.
-  let baselineFromGenerationId: GenerationId | null = null;
-  let fallbackReason: string | null = null;
+  let baselineFromGenerationId =
+    checkpoint.baselineFromGenerationId as GenerationId | null;
+  let fallbackReason: string | null = checkpoint.fallbackReason;
   const candidate = payload.baselineFromGenerationId;
-  if (candidate !== null) {
+  if (!resumed && candidate !== null) {
     const repo = deps.repos.repos.byId(job.repoId);
     const plan = await planBaseline({
       candidate,
       targetSha: sha,
       language: "zh",
-      ...(repo?.mirrorPath !== undefined
-        ? { repoPath: repo.mirrorPath }
-        : {}),
+      ...(repo?.mirrorPath !== undefined ? { repoPath: repo.mirrorPath } : {}),
     });
     if (plan.usable && plan.source !== undefined) {
       try {
@@ -804,6 +678,7 @@ async function runGeneration(
   checkAborted(signal);
 
   const metered = meteredHandle(model, {
+    checkSignal: () => checkAborted(signal),
     kind: usageKind,
     jobId: job.jobId,
     role: "repo_job",
@@ -812,16 +687,52 @@ async function runGeneration(
     usage: deps.usage,
   });
 
-  await deps.upstream.run({
-    worktreePath: workspace.treeDir,
-    mode: payload.mode,
-    language: "zh",
-    modelId: model.modelId,
-    model: metered.chat(),
-    writeRepoFiles: false,
-  });
+  checkpoint.baselineFromGenerationId = baselineFromGenerationId;
+  checkpoint.fallbackReason = fallbackReason;
+  await writeCheckpoint(workspace.stagingDir, checkpoint);
+  report(
+    input,
+    checkpoint.documents ? "pages" : "planning",
+    resumed ? "正在从已保存的规划和页面断点恢复" : "正在探索项目并规划文档",
+    { resumeAvailable: true },
+  );
+  let currentProgress: JobProgress = {
+    phase: "planning",
+    done: 0,
+    total: null,
+  };
+  if (!checkpoint.documents)
+    await deps.upstream.run({
+      worktreePath: workspace.treeDir,
+      mode: payload.mode,
+      language: "zh",
+      modelId: model.modelId,
+      model: metered.chat(),
+      writeRepoFiles: false,
+      onDocumentsReady: async () => {
+        checkAborted(signal);
+        checkpoint.documents = await documentHashes(
+          path.join(workspace.treeDir, "openwiki"),
+        );
+        await writeCheckpoint(workspace.stagingDir, checkpoint);
+      },
+      onEvent: (event) => {
+        if (signal.aborted) return;
+        const progress = upstreamProgress(event, currentProgress);
+        if (progress) {
+          currentProgress = { ...currentProgress, ...progress };
+          input.onProgress?.(progress);
+        }
+      },
+    });
   checkAborted(signal);
 
+  if (!checkpoint.documents) {
+    checkpoint.documents = await documentHashes(
+      path.join(workspace.treeDir, "openwiki"),
+    );
+    await writeCheckpoint(workspace.stagingDir, checkpoint);
+  }
   await copyWikiTree(
     path.join(workspace.treeDir, "openwiki"),
     path.join(workspace.knowledgeDir, "openwiki"),
@@ -853,9 +764,17 @@ async function runGeneration(
     external: deps.external,
     clock: deps.clock,
   };
-  const result = await deps.lessons.buildResearchLessons(buildInput);
+  report(input, "lessons", "正在生成阅读讲解并校验代码证据");
+  const result =
+    checkpoint.lessons?.result ??
+    (await deps.lessons.buildResearchLessons(buildInput));
   checkAborted(signal);
+  report(input, "checking", "正在检查讲解是否满足发布要求");
   assertPublishable(result);
+  if (!checkpoint.lessons) {
+    checkpoint.lessons = { result, sources: sourceRows(deps, generationId) };
+    await writeCheckpoint(workspace.stagingDir, checkpoint);
+  }
 
   const lessons = await writeLessonFiles(
     result.lessons,
@@ -863,7 +782,11 @@ async function runGeneration(
     workspace.lessonsDir,
     deps.clock.now().toISOString(),
   );
-  const manifest = await deps.publisher.seal(workspace.knowledgeDir, generationId);
+  report(input, "sealing", "正在保存并校验生成文件");
+  const manifest = await deps.publisher.seal(
+    workspace.knowledgeDir,
+    generationId,
+  );
   checkAborted(signal);
 
   const commit: PublishCommit & PublishGenerationExtras = {
@@ -873,7 +796,7 @@ async function runGeneration(
     kind: "research",
     comparisonBaseSha: null,
     lessons,
-    sources: sourceRows(deps, generationId),
+    sources: checkpoint.lessons.sources,
     changeEventId: null,
     linkedEventId: null,
     linkRelation: null,
@@ -889,6 +812,7 @@ async function runGeneration(
     baselineFromGenerationId,
     fallbackReason,
   };
+  report(input, "publishing", "正在发布讲解");
   await deps.publisher.publishAtomic(commit);
   await removeBuildWorktree(deps.paths, job.jobId).catch(() => undefined);
   return { generationId };
@@ -899,28 +823,32 @@ async function runComparison(
 ): Promise<ExecuteJobResult> {
   const { deps, job, signal, gate } = input;
   const payload = job.payload as ComparisonPayload;
-  const model = requireModel(deps);
+  const model = requireModel(deps, payload.config);
+  report(input, "resolving", "正在解析对比版本");
 
-  const baseSha = await deps.snapshotService.resolve(job.repoId, payload.baseSha);
-  const headSha = await deps.snapshotService.resolve(job.repoId, payload.headSha);
+  const baseSha = await deps.snapshotService.resolve(
+    job.repoId,
+    payload.baseSha,
+  );
+  const headSha = await deps.snapshotService.resolve(
+    job.repoId,
+    payload.headSha,
+  );
   checkAborted(signal);
+  report(input, "snapshot", "正在准备对比快照", { commitSha: headSha });
   const baseSnapshot = await deps.snapshotService.ensure(job.repoId, baseSha);
   const headSnapshot = await deps.snapshotService.ensure(job.repoId, headSha);
   const mergeBase = await mergeBaseOf(deps, job.repoId, baseSha, headSha);
   const scope = normalizeScope(payload.scope);
   const config = payload.config;
-  const cacheKey = cacheKeyFor(
-    deps,
-    job,
-    headSha,
-    mergeBase,
-    scope,
-    config,
-  );
+  const cacheKey = cacheKeyFor(deps, job, headSha, mergeBase, scope, config);
   const generationId = generationIdFromCacheKey(cacheKey);
 
   const cached = deps.repos.generations.byCacheKey(cacheKey);
   if (cached !== null && cached.status === "published") {
+    report(input, "publishing", "命中已发布缓存，复用对比讲解", {
+      cacheHit: true,
+    });
     return { generationId: cached.generationId };
   }
 
@@ -934,6 +862,7 @@ async function runComparison(
   await mkdir(workspace.lessonsDir, { recursive: true, mode: 0o700 });
   checkAborted(signal);
 
+  report(input, "diffing", "正在分析两个版本的代码差异");
   const diff = await diffBetween(deps, job.repoId, baseSha, headSha);
   const coverage = await deps.snapshotService.coverage(
     headSnapshot,
@@ -943,6 +872,7 @@ async function runComparison(
   await writeCoverage(workspace.knowledgeDir, coverage);
 
   const metered = meteredHandle(model, {
+    checkSignal: () => checkAborted(signal),
     kind: usageKind,
     jobId: job.jobId,
     role: "lesson",
@@ -994,8 +924,10 @@ async function runComparison(
     external: deps.external,
     clock: deps.clock,
   };
+  report(input, "lessons", "正在生成对比讲解并校验代码证据");
   const result = await deps.lessons.buildComparisonLesson(buildInput);
   checkAborted(signal);
+  report(input, "checking", "正在检查对比讲解的发布要求");
   assertPublishable(result);
 
   const lessons = await writeLessonFiles(
@@ -1004,7 +936,11 @@ async function runComparison(
     workspace.lessonsDir,
     deps.clock.now().toISOString(),
   );
-  const manifest = await deps.publisher.seal(workspace.knowledgeDir, generationId);
+  report(input, "sealing", "正在保存并校验生成文件");
+  const manifest = await deps.publisher.seal(
+    workspace.knowledgeDir,
+    generationId,
+  );
   checkAborted(signal);
 
   const commit: PublishCommit & PublishGenerationExtras = {
@@ -1028,6 +964,7 @@ async function runComparison(
     upstreamVersion: UPSTREAM_VERSION,
     promptTemplateVersion: config.promptTemplateVersion,
   };
+  report(input, "publishing", "正在发布对比讲解");
   await deps.publisher.publishAtomic(commit);
   await removeBuildWorktree(deps.paths, job.jobId).catch(() => undefined);
   return { generationId };
@@ -1035,18 +972,29 @@ async function runComparison(
 
 async function runChange(input: ExecuteJobInput): Promise<ExecuteJobResult> {
   const { deps, job, signal, gate } = input;
-  const payload = job.payload as Extract<JobRecord["payload"], { kind: "change" }>;
+  const payload = job.payload as Extract<
+    JobRecord["payload"],
+    { kind: "change" }
+  >;
   const model = requireModel(deps);
 
+  report(input, "resolving", "正在解析变更版本");
   const event = deps.repos.changes.byId(payload.eventId);
   if (event === null) {
     throw new LearningError("not_found", "变更事件不存在", {
       eventId: payload.eventId,
     });
   }
-  const baseSha = await deps.snapshotService.resolve(job.repoId, payload.baseSha);
-  const headSha = await deps.snapshotService.resolve(job.repoId, payload.headSha);
+  const baseSha = await deps.snapshotService.resolve(
+    job.repoId,
+    payload.baseSha,
+  );
+  const headSha = await deps.snapshotService.resolve(
+    job.repoId,
+    payload.headSha,
+  );
   checkAborted(signal);
+  report(input, "snapshot", "正在准备变更快照", { commitSha: headSha });
   const baseSnapshot = await deps.snapshotService.ensure(job.repoId, baseSha);
   const headSnapshot = await deps.snapshotService.ensure(job.repoId, headSha);
   const project =
@@ -1073,6 +1021,7 @@ async function runChange(input: ExecuteJobInput): Promise<ExecuteJobResult> {
   await mkdir(workspace.lessonsDir, { recursive: true, mode: 0o700 });
   checkAborted(signal);
 
+  report(input, "diffing", "正在分析本次变更的代码差异");
   const diff = await diffBetween(deps, job.repoId, baseSha, headSha);
   const coverage = await deps.snapshotService.coverage(
     headSnapshot,
@@ -1082,6 +1031,7 @@ async function runChange(input: ExecuteJobInput): Promise<ExecuteJobResult> {
   await writeCoverage(workspace.knowledgeDir, coverage);
 
   const metered = meteredHandle(model, {
+    checkSignal: () => checkAborted(signal),
     kind: usageKind,
     jobId: job.jobId,
     role: "change",
@@ -1110,8 +1060,10 @@ async function runChange(input: ExecuteJobInput): Promise<ExecuteJobResult> {
     external: deps.external,
     clock: deps.clock,
   };
+  report(input, "lessons", "正在生成变更讲解并校验代码证据");
   const result = await deps.lessons.buildChangeLesson(buildInput);
   checkAborted(signal);
+  report(input, "checking", "正在检查变更讲解的发布要求");
   assertPublishable(result);
 
   const lessons = await writeLessonFiles(
@@ -1120,7 +1072,11 @@ async function runChange(input: ExecuteJobInput): Promise<ExecuteJobResult> {
     workspace.lessonsDir,
     deps.clock.now().toISOString(),
   );
-  const manifest = await deps.publisher.seal(workspace.knowledgeDir, generationId);
+  report(input, "sealing", "正在保存并校验生成文件");
+  const manifest = await deps.publisher.seal(
+    workspace.knowledgeDir,
+    generationId,
+  );
   checkAborted(signal);
 
   const commit: PublishCommit & PublishGenerationExtras = {
@@ -1144,6 +1100,7 @@ async function runChange(input: ExecuteJobInput): Promise<ExecuteJobResult> {
     upstreamVersion: UPSTREAM_VERSION,
     promptTemplateVersion: config.promptTemplateVersion,
   };
+  report(input, "publishing", "正在发布变更讲解");
   await deps.publisher.publishAtomic(commit);
   await removeBuildWorktree(deps.paths, job.jobId).catch(() => undefined);
   return { generationId };

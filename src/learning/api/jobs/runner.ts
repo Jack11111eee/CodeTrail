@@ -1,3 +1,5 @@
+import { recoveryProjectForJob } from "./project-job.js";
+import { modelGateFor } from "../../config/metered-model.js";
 /* eslint-disable @typescript-eslint/require-await -- the JobRunner port is async by contract */
 /**
  * Durable job state machine (architecture §7.1).
@@ -39,15 +41,15 @@ import type {
   NewJob,
 } from "../../contracts/index.js";
 import { UPSTREAM_VERSION } from "../../config/defaults.js";
-import {
-  createModelGate,
-  executeJob,
-  JobAbortedError,
-  type ModelGate,
-} from "./pipeline.js";
+import { executeJob, JobAbortedError, type ModelGate } from "./pipeline.js";
+import { recordJobEvent } from "./progress.js";
 
 // Declared in contracts/ports.ts (§3.13); re-export only.
-export type { EnqueueJobInput, JobRunner, UsageMeter } from "../../contracts/index.js";
+export type {
+  EnqueueJobInput,
+  JobRunner,
+  UsageMeter,
+} from "../../contracts/index.js";
 export { createUsageMeter } from "./usage.js";
 export { createModelGate } from "./pipeline.js";
 export type { ModelGate } from "./pipeline.js";
@@ -80,9 +82,7 @@ function messageOf(error: unknown): string {
 
 function isUniqueViolation(error: unknown, column: string): boolean {
   const message = messageOf(error);
-  return (
-    /UNIQUE constraint failed/iu.test(message) && message.includes(column)
-  );
+  return /UNIQUE constraint failed/iu.test(message) && message.includes(column);
 }
 
 /** The subset of a transition table a job may take from `from`. */
@@ -103,10 +103,9 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
   const pending: JobId[] = [];
   const aborts = new Map<JobId, AbortController>();
   const listeners = new Map<JobId, Set<(event: JobEvent) => void>>();
-  const sequences = new Map<JobId, number>();
   const retryClaims = new Set<string>();
   const drainWaiters: (() => void)[] = [];
-  const gate: ModelGate = createModelGate();
+  const gate: ModelGate = modelGateFor(db);
 
   let running: JobId | null = null;
   let scheduled = false;
@@ -129,10 +128,12 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
     return repos.jobs.transition(jobId, [job.state], to, patch);
   }
 
-  function emit(jobId: JobId, event: Omit<JobEvent, "jobId" | "seq" | "at">): void {
-    const seq = (sequences.get(jobId) ?? 0) + 1;
-    sequences.set(jobId, seq);
-    const full: JobEvent = { jobId, seq, at: now(), ...event };
+  function emit(
+    jobId: JobId,
+    event: Omit<JobEvent, "jobId" | "seq" | "at">,
+  ): void {
+    const full = recordJobEvent(repos, jobId, event, now());
+    if (!full) return;
     for (const listener of listeners.get(jobId) ?? []) {
       try {
         listener(full);
@@ -148,12 +149,19 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
   }
 
   function schedule(): void {
-    if (running !== null || scheduled) return;
+    if (running !== null || scheduled || pending.length === 0) return;
     scheduled = true;
     setImmediate(() => {
       scheduled = false;
       void pump();
     });
+  }
+
+  function loadQueued(): void {
+    for (const job of repos.jobs.listByState(["queued"])) {
+      if (job.jobId !== running && !pending.includes(job.jobId))
+        pending.push(job.jobId);
+    }
   }
 
   async function pump(): Promise<void> {
@@ -199,6 +207,8 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
         job: current,
         signal: controller.signal,
         gate,
+        onProgress: (progress) =>
+          emit(job.jobId, { type: "progress", progress }),
       });
       const latest = repos.jobs.byId(job.jobId);
       if (latest !== null && latest.state === "completed") {
@@ -240,7 +250,13 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
           errorDetail: null,
         });
         if (done) {
-          repos.attempts.close(job.jobId, attempt, "cancelled", finishedAt, null);
+          repos.attempts.close(
+            job.jobId,
+            attempt,
+            "cancelled",
+            finishedAt,
+            null,
+          );
           emit(job.jobId, { type: "state", state: "cancelled" });
         }
       } else if (latest !== null && latest.state === "cancelling") {
@@ -250,7 +266,13 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
           errorDetail: messageOf(error),
         });
         if (done) {
-          repos.attempts.close(job.jobId, attempt, "cancelled", finishedAt, null);
+          repos.attempts.close(
+            job.jobId,
+            attempt,
+            "cancelled",
+            finishedAt,
+            null,
+          );
           emit(job.jobId, { type: "state", state: "cancelled" });
         }
       } else if (latest !== null && latest.state !== "completed") {
@@ -301,6 +323,8 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
       return null;
     }
     const cacheKey = computeCacheKey({
+      kind: input.payload.kind === "comparison" ? "comparison" : "research",
+      comparisonBaseSha: input.comparisonBaseSha,
       repoIdentity: repo.identity,
       targetCommitSha,
       baseContextSha,
@@ -318,7 +342,13 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
     async enqueue(input: EnqueueJobInput): Promise<JobRecord> {
       const dedupeKey = computeDedupeKey(input);
       const existing = repos.jobs.byDedupeKey(dedupeKey);
-      if (existing !== null) return existing;
+      if (existing !== null) {
+        if (existing.state === "queued") {
+          loadQueued();
+          schedule();
+        }
+        return existing;
+      }
 
       if (input.streamId !== null && busyStream(input.streamId)) {
         throw new LearningError("busy_stream", "该流已有正在运行的任务", {
@@ -365,6 +395,18 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
         pending.push(jobId);
         emit(jobId, { type: "state", state: "queued" });
         schedule();
+      } else {
+        emit(jobId, {
+          type: "progress",
+          progress: {
+            phase: "publishing",
+            done: 1,
+            total: 1,
+            message: "命中已发布缓存，复用已有讲解",
+            cacheHit: true,
+          },
+        });
+        emit(jobId, { type: "state", state: "completed" });
       }
       return repos.jobs.byId(jobId) as JobRecord;
     },
@@ -424,10 +466,21 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
           streamId: job.streamId,
         });
       }
+      const owner = job.projectId ? repos.projects.byId(job.projectId) : null;
+      const recoveredProject = owner?.deletedAt
+        ? recoveryProjectForJob(repos, job)
+        : null;
+      if (owner?.deletedAt && !recoveredProject)
+        throw new LearningError(
+          "source_removed",
+          "原项目已移除，未找到唯一且读取范围相同的恢复项目",
+          { jobId },
+        );
       if (job.streamId !== null) retryClaims.add(job.streamId);
 
       repos.jobs.bumpAttempt(jobId);
       const queued = transitionJob(jobId, "queued", {
+        projectId: recoveredProject?.projectId ?? job.projectId,
         errorCode: null,
         errorDetail: null,
         startedAt: null,
@@ -461,6 +514,7 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
           { errorCode: "interrupted", finishedAt: at, errorDetail: null },
         );
         if (!interrupted) continue;
+        emit(job.jobId, { type: "state", state: "interrupted" });
         const attempt = repos.attempts
           .list(job.jobId)
           .find((entry) => entry.state === "running");
@@ -475,10 +529,19 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
         }
         recovered += 1;
       }
+      loadQueued();
+      schedule();
       return recovered;
     },
 
+    wake(): void {
+      loadQueued();
+      schedule();
+    },
+
     drain(): Promise<void> {
+      loadQueued();
+      schedule();
       if (running === null && pending.length === 0) return Promise.resolve();
       return new Promise<void>((resolve) => drainWaiters.push(resolve));
     },

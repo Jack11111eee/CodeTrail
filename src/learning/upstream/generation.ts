@@ -47,11 +47,7 @@ import {
 } from "./guard.js";
 
 // Declared in contracts/upstream.ts (§3.15); re-export only.
-export type {
-  GenerationRunRequest,
-  UpstreamRunEvent,
-  UpstreamGenerationPort,
-};
+export type { GenerationRunRequest, UpstreamRunEvent, UpstreamGenerationPort };
 
 /** Structural result of one native repository run. */
 export interface NativeRepositoryRunResult {
@@ -106,20 +102,66 @@ export function mapUpstreamError(error: unknown): never {
 }
 
 /** Narrows one upstream run event to the contract's display shape. */
+function displayPath(value: unknown): string | undefined {
+  if (
+    typeof value !== "string" ||
+    value.length > 240 ||
+    /[?:\\]/u.test(value) ||
+    [...value].some((char) => char.charCodeAt(0) < 32)
+  )
+    return undefined;
+  // Agent filesystem paths are rooted at the repository's virtual '/'.
+  const relative = value.replace(/^\/+|^\.\//gu, "");
+  if (relative.split("/").includes("..")) return undefined;
+  return relative || ".";
+}
+
 function toUpstreamEvent(event: OpenWikiRunEvent): UpstreamRunEvent {
   switch (event.type) {
     case "repository_progress":
       return {
         type: "repository_progress",
         stage: event.stage,
-        ...(event.page === undefined ? {} : { page: event.page }),
+        ...(event.message === undefined ? {} : { message: event.message }),
+        ...(event.failure === undefined ? {} : { failure: event.failure }),
+        ...(event.page === undefined ? {} : { page: displayPath(event.page) }),
+        ...(event.pageIndex === undefined
+          ? {}
+          : { pageIndex: event.pageIndex }),
+        ...(event.pageCount === undefined
+          ? {}
+          : { pageCount: event.pageCount }),
+        ...(event.completedCount === undefined
+          ? {}
+          : { completedCount: event.completedCount }),
+        ...(event.successfulCount === undefined
+          ? {}
+          : { successfulCount: event.successfulCount }),
+        ...(event.skippedCount === undefined
+          ? {}
+          : { skippedCount: event.skippedCount }),
       };
-    case "tool_start":
+    case "tool_start": {
+      const input =
+        typeof event.input === "object" && event.input !== null
+          ? (event.input as Record<string, unknown>)
+          : {};
+      const filePath = displayPath(
+        input.file_path ?? input.path ?? input.directory,
+      );
+      return {
+        type: event.type,
+        name: event.name,
+        ...(event.page === undefined ? {} : { page: displayPath(event.page) }),
+        ...(filePath ? { path: filePath } : {}),
+      };
+    }
     case "tool_end":
       return {
         type: event.type,
         name: event.name,
-        ...(event.page === undefined ? {} : { page: event.page }),
+        status: event.status,
+        ...(event.page === undefined ? {} : { page: displayPath(event.page) }),
       };
     case "text":
       return { type: "text", message: event.text };
@@ -146,9 +188,7 @@ export function createUpstreamGenerationPort(
     async run(
       request: GenerationRunRequest,
     ): Promise<{ skipped: boolean; sourceChanged: boolean }> {
-      if (
-        (request as { writeRepoFiles?: unknown }).writeRepoFiles !== false
-      ) {
+      if ((request as { writeRepoFiles?: unknown }).writeRepoFiles !== false) {
         throw new LearningError(
           "invalid_input",
           "生成任务必须关闭仓库文件写入",
@@ -169,6 +209,24 @@ export function createUpstreamGenerationPort(
           modelId: request.modelId,
           model: request.model,
           pageConcurrency: PAGE_CONCURRENCY,
+          retainIncompleteRun: true,
+          ...(request.onDocumentsReady
+            ? {
+                onDocumentsReady: async () => {
+                  const violation = await verifyProtectedHashes(
+                    protectedBefore,
+                    request.worktreePath,
+                  );
+                  if (violation.blocked !== null)
+                    throw new LearningError(
+                      "protected_write_blocked",
+                      "上游尝试写入受保护路径",
+                      { path: violation.blocked },
+                    );
+                  await request.onDocumentsReady?.();
+                },
+              }
+            : {}),
           writeRepoFiles: false,
           ...(request.planningContext === undefined
             ? {}
@@ -246,9 +304,11 @@ export function createUpstreamGenerationPort(
       ].sort((left, right) => left.localeCompare(right));
     },
 
-    async lastUpdate(
-      worktreePath: string,
-    ): Promise<{ gitHead?: string; status?: string; language?: string } | null> {
+    async lastUpdate(worktreePath: string): Promise<{
+      gitHead?: string;
+      status?: string;
+      language?: string;
+    } | null> {
       const metadataFile = path.join(worktreePath, UPDATE_METADATA_PATH);
       try {
         const parsed: unknown = JSON.parse(
@@ -267,8 +327,7 @@ export function createUpstreamGenerationPort(
           ...(typeof record.gitHead === "string"
             ? { gitHead: record.gitHead }
             : {}),
-          status:
-            record.status === "interrupted" ? "interrupted" : "complete",
+          status: record.status === "interrupted" ? "interrupted" : "complete",
           ...(typeof record.language === "string"
             ? { language: record.language }
             : {}),
