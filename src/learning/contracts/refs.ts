@@ -88,6 +88,7 @@ export interface GenerationConfig {
   model: {
     provider: string;
     model: string;
+    baseUrl?: string | null;
     maxOutputTokens: number;
     temperature: number;
   };

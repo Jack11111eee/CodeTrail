@@ -53,6 +53,8 @@ export interface GenerationRunRequest {
   /** Literal false — the adapter never allows true. */
   writeRepoFiles: false;
   onEvent?: (e: UpstreamRunEvent) => void;
+  /** Durable stage commit, called before the native page checkpoint is removed. */
+  onDocumentsReady?: () => Promise<void>;
 }
 
 export interface UpstreamRunEvent {
@@ -61,6 +63,15 @@ export interface UpstreamRunEvent {
   page?: string;
   name?: string;
   message?: string;
+  failure?: { code: string; message: string };
+  pageIndex?: number;
+  pageCount?: number;
+  completedCount?: number;
+  successfulCount?: number;
+  skippedCount?: number;
+  /** Safe relative path only, narrowed by the upstream adapter. */
+  path?: string;
+  status?: "error" | "finished";
 }
 
 export interface UpstreamGenerationPort {

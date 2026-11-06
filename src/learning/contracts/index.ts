@@ -15,3 +15,5 @@ export * from "./foundation.js";
 export * from "./upstream.js";
 export * from "./github.js";
 export * from "./lessonbuild.js";
+
+export * from "./topics.js";

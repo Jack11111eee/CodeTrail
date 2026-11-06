@@ -124,6 +124,7 @@ export interface LessonRow {
   relPath: string;
   jsonSha256: string;
   publishedAt: string;
+  deletedAt?: string | null;
 }
 
 export interface SourceRow {
@@ -298,6 +299,7 @@ export interface JobsRepo {
   insert(job: NewJob): void;
   byDedupeKey(key: string): JobRecord | null;
   byId(id: JobId): JobRecord | null;
+  updateProgress(id: JobId, progress: JobProgress): void;
   transition(
     id: JobId,
     from: JobState[],
@@ -342,8 +344,16 @@ export interface GenerationsRepo {
 export interface LessonsRepo {
   /** Publish transaction only. */
   insertMany(rows: LessonRow[]): void;
-  listByGeneration(gid: GenerationId): LessonRow[];
-  byId(gid: GenerationId, lessonId: LessonId): LessonRow | null;
+  listByGeneration(
+    gid: GenerationId,
+    opts?: { includeDeleted?: boolean },
+  ): LessonRow[];
+  byId(
+    gid: GenerationId,
+    lessonId: LessonId,
+    opts?: { includeDeleted?: boolean },
+  ): LessonRow | null;
+  setDeleted(gid: GenerationId, lessonId: LessonId, at: string | null): void;
 }
 
 export interface SourcesRepo {
@@ -418,6 +428,7 @@ export interface PreferencesRepo {
   version(): number;
   readingPositions(): ReadingPosition[];
   putReadingPosition(pos: ReadingPosition): void;
+  clearReadingPosition(gid: GenerationId, lessonId: LessonId): void;
 }
 
 export interface SettingsRepo {
@@ -463,6 +474,8 @@ export interface UsageRecord {
 export interface ModelSettings {
   provider: string;
   model: string;
+  /** Null/absent uses the startup environment or the provider default. */
+  baseUrl?: string | null;
   maxOutputTokens: number;
   temperature: number;
   pricing: { inputCentsPerMTok: number; outputCentsPerMTok: number } | null;

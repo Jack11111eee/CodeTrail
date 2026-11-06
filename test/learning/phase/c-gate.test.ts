@@ -1203,6 +1203,7 @@ describe("phase C — the pull-request stream", () => {
     const config = gateConfig();
     expect(prGeneration.cacheKey).toBe(
       computeCacheKey({
+        kind: "change",
         repoIdentity: gate.repo.identity,
         targetCommitSha: headTwo,
         baseContextSha: mergeBase,

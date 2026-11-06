@@ -158,6 +158,11 @@ export function createJobsRepo(db: Database): JobsRepo {
     byId(id: JobId): JobRecord | null {
       return one(byIdStmt.get(id));
     },
+    updateProgress(id: JobId, progress: JobProgress): void {
+      db.raw
+        .prepare("UPDATE jobs SET progress_json = ? WHERE job_id = ?")
+        .run(JSON.stringify(progress), id);
+    },
     transition(
       id: JobId,
       from: JobState[],

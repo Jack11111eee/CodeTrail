@@ -117,7 +117,7 @@ function expectedConfigHash(config: GenerationConfig): string {
   ]);
 }
 
-describe("dedupe_key (dk1)", () => {
+describe("dedupe_key (dk2)", () => {
   const input = {
     repoId: REPO_ID,
     streamId: null,
@@ -130,7 +130,7 @@ describe("dedupe_key (dk1)", () => {
 
   it("matches an independent recomputation and the golden digest", () => {
     const expected = digest([
-      "dk1",
+      "dk2",
       REPO_ID,
       "",
       "",
@@ -141,7 +141,7 @@ describe("dedupe_key (dk1)", () => {
     ]);
     expect(computeDedupeKey(input)).toBe(expected);
     expect(computeDedupeKey(input)).toBe(
-      "sha256:b26cad0913b5046ac47a0a0781549945f42edc58b799794b993ad8faa3803557",
+      "sha256:7a8954d69f0f36aec88e968e76575ea7ef34960050e920eea291b9626d90fb98",
     );
   });
 
@@ -158,7 +158,7 @@ describe("dedupe_key (dk1)", () => {
   });
 });
 
-describe("cache_key (ck1)", () => {
+describe("cache_key (ck2)", () => {
   const input = {
     repoIdentity: "local:/tmp/repo",
     targetCommitSha: "a".repeat(40),
@@ -172,7 +172,9 @@ describe("cache_key (ck1)", () => {
 
   it("matches an independent recomputation and the golden digest", () => {
     const expected = digest([
-      "ck1",
+      "ck2",
+      "research",
+      "",
       "local:/tmp/repo",
       "a".repeat(40),
       "",
@@ -184,7 +186,7 @@ describe("cache_key (ck1)", () => {
     ]);
     expect(computeCacheKey(input)).toBe(expected);
     expect(computeCacheKey(input)).toBe(
-      "sha256:b45b7fe1b7ce21155c92f8a90ce94a51547f54e1fe5f9e9ceecfe75994912a28",
+      "sha256:6a1146223caab4582ba96f4f5cc115e46f2864a84ead0355c5a3f6ff227dd834",
     );
   });
 
@@ -195,7 +197,9 @@ describe("cache_key (ck1)", () => {
     });
     expect(withBase).toBe(
       digest([
-        "ck1",
+        "ck2",
+        "research",
+        "",
         "local:/tmp/repo",
         "a".repeat(40),
         "b".repeat(40),

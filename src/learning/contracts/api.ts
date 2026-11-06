@@ -1,3 +1,4 @@
+import type { LearningTopic, LearningTopicView } from "./topics.js";
 import type {
   ChangeEventKind,
   ChangeEventPayload,
@@ -53,6 +54,9 @@ export interface CreateProjectResponse {
 }
 
 export interface ProjectSummary {
+  generationId?: GenerationId | null;
+  latestJobId?: JobId | null;
+  latestJobResumeAvailable?: boolean;
   projectId: ProjectId;
   repoId: RepoId;
   kind: RepoKind;
@@ -252,6 +256,7 @@ export interface ChangeSummary {
   discoveredAt: string;
   publishedAt: string | null;
   title: string;
+  generationId?: GenerationId | null;
 }
 
 export interface ChangeListView {
@@ -300,6 +305,10 @@ export interface TermListView {
 }
 
 export interface ModelSettingsView {
+  baseUrl?: string | null;
+  apiKeyConfigured?: boolean;
+  maxOutputTokens?: number;
+  temperature?: number;
   provider: string;
   model: string;
   pricingConfigured: boolean;
@@ -309,12 +318,30 @@ export interface ModelSettingsView {
 }
 
 export interface PutModelSettingsRequest {
+  /** Null/blank clears the saved override. Omission retains it. */
+  baseUrl?: string | null;
+  /** Write-only; never persisted into model settings or returned in a DTO. */
+  apiKey?: string;
   provider: string;
   model: string;
   maxOutputTokens?: number;
   temperature?: number;
   pricing?: { inputCentsPerMTok: number; outputCentsPerMTok: number } | null;
   quota?: Partial<ModelSettingsView["quota"]>;
+}
+
+export interface TestModelConnectionRequest {
+  provider: string;
+  model: string;
+  baseUrl?: string | null;
+  /** An unsaved key takes precedence over the stored/environment key. */
+  apiKey?: string;
+}
+
+export interface TestModelConnectionView {
+  ok: true;
+  latencyMs: number;
+  message: string;
 }
 
 export type UsageKind = "initial" | "update" | "comparison" | "qa" | "change";
@@ -352,11 +379,17 @@ export interface ProjectsPageModel {
 }
 
 export interface ReaderPageModel {
+  projectId?: ProjectId | null;
+  source?: SourceView | null;
   generationId: GenerationId;
   commitSha: string;
   repoDisplayName: string;
   lessons: LessonSummary[];
   activeLesson: LessonDetailView | null;
+  deletedLessons?: LessonSummary[];
+  topics?: LearningTopic[];
+  deletedTopics?: LearningTopic[];
+  activeTopic?: LearningTopicView | null;
   coverage: CoverageReport;
   conversation: ConversationView | null;
   readingPosition: ReadingPosition | null;
@@ -364,6 +397,8 @@ export interface ReaderPageModel {
 }
 
 export interface InboxPageModel {
+  projectName?: string;
+  projects?: { projectId: ProjectId; displayName: string }[];
   projectId: ProjectId;
   items: ChangeSummary[];
   next: string | null;

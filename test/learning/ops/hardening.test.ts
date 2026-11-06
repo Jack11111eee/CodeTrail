@@ -121,7 +121,7 @@ describe("frozen defaults", () => {
     expect(UPSTREAM_PACKAGE_VERSION).toBe("0.7.2");
     expect(UPSTREAM_VERSION).toBe("0.7.2+7bb583d664f2");
     expect(PROMPT_TEMPLATE_VERSION).toBe("codetrail-lesson-v1");
-    expect(SCHEMA_VERSION).toBe(1);
+    expect(SCHEMA_VERSION).toBe(3);
     expect(MAX_BODY_BYTES).toBe(1024 * 1024);
     expect(DEFAULT_WATCH_INTERVAL_MS).toBe(300_000);
     expect(PR_OVERLAP_MS).toBe(120_000);
