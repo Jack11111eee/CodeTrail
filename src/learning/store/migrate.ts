@@ -147,6 +147,16 @@ CREATE TABLE IF NOT EXISTS app_settings (
 /** The ordered migration list. Migration 1 is the complete schema. */
 export const MIGRATIONS: readonly { version: number; sql: string }[] = [
   { version: 1, sql: MIGRATION_1_SQL },
+  { version: 2, sql: "ALTER TABLE lessons ADD COLUMN deleted_at TEXT;" },
+  {
+    version: 3,
+    sql: `CREATE TABLE learning_topics (
+    topic_id TEXT PRIMARY KEY, generation_id TEXT NOT NULL REFERENCES generations(generation_id),
+    conversation_id TEXT NOT NULL UNIQUE REFERENCES conversations(conversation_id), title TEXT,
+    auto_title INTEGER NOT NULL DEFAULT 1, first_question TEXT, lesson_message_id TEXT REFERENCES messages(message_id),
+    state TEXT NOT NULL DEFAULT 'draft', error_detail TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT);
+    CREATE INDEX idx_learning_topics_generation ON learning_topics(generation_id, created_at);`,
+  },
 ];
 
 const CREATE_MIGRATIONS_TABLE =
@@ -161,7 +171,7 @@ const INSERT_VERSION =
  *
  * Returns the number of migrations applied and the resulting schema version.
  * A second call against an up-to-date file applies nothing and returns
- * `{ applied: 0, version: 1 }`.
+ * `{ applied: 0, version: 3 }`.
  */
 export function migrate(db: Database): { applied: number; version: number } {
   db.raw.exec(CREATE_MIGRATIONS_TABLE);

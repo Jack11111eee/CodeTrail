@@ -228,9 +228,22 @@ describe("AC-F06-01: independent default-branch and PR streams", () => {
     expect(prsAfter.map((item) => item.changeId)).toEqual(
       pullRequests.map((item) => item.changeId),
     );
-    expect(prsAfter.map((item) => item.state)).toEqual(
-      pullRequests.map((item) => item.state),
+    // The durable dispatcher now executes these jobs automatically. Analysis
+    // state may advance while main is analyzed; PR identity and versions may not.
+    expect(
+      prsAfter.map(({ headSha, baseSha }) => ({ headSha, baseSha })),
+    ).toEqual(
+      pullRequests.map(({ headSha, baseSha }) => ({ headSha, baseSha })),
     );
+    for (const item of prsAfter)
+      expect([
+        "queued",
+        "analyzing",
+        "published",
+        "failed",
+        "waiting",
+        "cancelled",
+      ]).toContain(item.state);
 
     const commitDetail = jsonOf<ChangeDetail>(
       await server.request(

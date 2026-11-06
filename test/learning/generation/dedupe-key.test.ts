@@ -2,9 +2,7 @@ import { createHash } from "node:crypto";
 
 import { afterEach, describe, expect, test } from "vitest";
 
-import {
-  computeDedupeKey,
-} from "../../../src/learning/contracts/index.ts";
+import { computeDedupeKey } from "../../../src/learning/contracts/index.ts";
 import {
   createHarness,
   generationInput,
@@ -29,7 +27,7 @@ function recompute(input: {
   analysisConfigHash: string;
 }): string {
   const parts = [
-    "dk1",
+    "dk2",
     input.repoId,
     input.streamId ?? "",
     input.comparisonBaseSha ?? "",
@@ -93,7 +91,11 @@ describe("dedupe key", () => {
     const scoped = await harness.runner.enqueue(
       generationInput(harness, {
         sha: SHA_A,
-        scope: { ...harness.scope, maxFiles: harness.scope.maxFiles - 1, hash: "scoped" },
+        scope: {
+          ...harness.scope,
+          maxFiles: harness.scope.maxFiles - 1,
+          hash: "scoped",
+        },
       }),
     );
     const configured = await harness.runner.enqueue(

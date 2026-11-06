@@ -52,8 +52,14 @@ export async function runWatchTick(
     perPage: DISCOVERY_DEFAULTS.perPage,
     maxPages: DISCOVERY_DEFAULTS.maxPages,
   };
-  const defaultBranch = await deps.discovery.tickDefaultBranch(projectId, opts);
-  const pullRequests = await deps.discovery.tickPullRequests(projectId, opts);
+  let defaultBranch, pullRequests;
+  try {
+    defaultBranch = await deps.discovery.tickDefaultBranch(projectId, opts);
+    pullRequests = await deps.discovery.tickPullRequests(projectId, opts);
+  } finally {
+    // Even a partially successful poll can have committed durable jobs.
+    deps.jobRunner.wake?.();
+  }
 
   const cursor = deps.repos.cursors.get(
     project.repoId,

@@ -12,7 +12,7 @@ import {
 } from "../../../src/learning/store/index.ts";
 import { AT, closeTempDb, createTempDb, type TempDb } from "./helpers.ts";
 
-/** The DDL's twenty-one tables; `migrations` is the bookkeeping one. */
+/** The DDL's twenty-two tables; `migrations` is the bookkeeping one. */
 const EXPECTED_TABLES = [
   "app_settings",
   "change_events",
@@ -23,6 +23,7 @@ const EXPECTED_TABLES = [
   "jobs",
   "learner_preferences",
   "lessons",
+  "learning_topics",
   "messages",
   "migrations",
   "preference_meta",
@@ -48,6 +49,7 @@ const EXPECTED_INDEXES = [
   "idx_jobs_state",
   "idx_jobs_stream_running",
   "idx_lessons_generation",
+  "idx_learning_topics_generation",
   "idx_messages_conversation",
   "idx_messages_streaming",
   "idx_projects_repo",
@@ -93,11 +95,11 @@ describe("store migrations", () => {
     closeTempDb(ctx);
   });
 
-  it("creates the twenty domain tables plus the migrations table", () => {
+  it("creates the twenty-one domain tables plus the migrations table", () => {
     expect(tableNames(ctx.db)).toEqual(EXPECTED_TABLES);
     expect(
       EXPECTED_TABLES.filter((name) => name !== "migrations"),
-    ).toHaveLength(20);
+    ).toHaveLength(21);
   });
 
   it("creates every listed index", () => {
@@ -105,22 +107,22 @@ describe("store migrations", () => {
   });
 
   it("applies nothing on a second migrate()", () => {
-    expect(migrate(ctx.db)).toEqual({ applied: 0, version: 1 });
-    expect(migrate(ctx.db)).toEqual({ applied: 0, version: 1 });
+    expect(migrate(ctx.db)).toEqual({ applied: 0, version: 3 });
+    expect(migrate(ctx.db)).toEqual({ applied: 0, version: 3 });
     expect(tableNames(ctx.db)).toEqual(EXPECTED_TABLES);
   });
 
-  it("applies migration 1 exactly once and records it durably across reconnects", () => {
+  it("applies migrations exactly once and records it durably across reconnects", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "codetrail-migrate-"));
     const file = path.join(dir, "fresh.sqlite");
 
     const first = openDatabase({ file });
     try {
-      expect(migrate(first)).toEqual({ applied: 1, version: 1 });
+      expect(migrate(first)).toEqual({ applied: 3, version: 3 });
       const rows = first.raw
         .prepare("SELECT version, applied_at FROM migrations ORDER BY version")
         .all() as { version: number; applied_at: string }[];
-      expect(rows.map((row) => row.version)).toEqual([1]);
+      expect(rows.map((row) => row.version)).toEqual([1, 2, 3]);
       expect(Number.isNaN(Date.parse(rows[0]?.applied_at ?? ""))).toBe(false);
     } finally {
       first.close();
@@ -130,11 +132,67 @@ describe("store migrations", () => {
     // applies nothing, even though the connection is brand new.
     const second = openDatabase({ file });
     try {
-      expect(migrate(second)).toEqual({ applied: 0, version: 1 });
+      expect(migrate(second)).toEqual({ applied: 0, version: 3 });
       expect(tableNames(second)).toEqual(EXPECTED_TABLES);
     } finally {
       second.close();
       fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("upgrades an existing v1 lesson without changing its content metadata", () => {
+    const db = openDatabase({ file: path.join(ctx.dir, "legacy.sqlite") });
+    try {
+      db.raw.exec(MIGRATIONS[0].sql);
+      db.raw
+        .prepare("INSERT INTO migrations(version,applied_at) VALUES (?,?)")
+        .run(1, AT);
+      db.raw
+        .prepare(
+          "INSERT INTO generations(generation_id,cache_key,repo_id,commit_sha,scope_hash,config_hash,prompt_template_version,preferences_version,upstream_version,status,content_dir,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        )
+        .run(
+          "g_old",
+          "cache_old",
+          "r_old",
+          "a".repeat(40),
+          "scope",
+          "config",
+          "prompt",
+          1,
+          "upstream",
+          "published",
+          "/tmp/old",
+          AT,
+        );
+      db.raw
+        .prepare(
+          "INSERT INTO lessons(lesson_id,generation_id,kind,title,rel_path,json_sha256,published_at) VALUES (?,?,?,?,?,?,?)",
+        )
+        .run(
+          "l_old",
+          "g_old",
+          "research",
+          "Old title",
+          "lessons/l_old.json",
+          "unchanged-hash",
+          AT,
+        );
+      expect(migrate(db)).toEqual({ applied: 2, version: 3 });
+      expect(
+        db.raw
+          .prepare(
+            "SELECT title,json_sha256,deleted_at FROM lessons WHERE lesson_id=?",
+          )
+          .get("l_old"),
+      ).toEqual({
+        title: "Old title",
+        json_sha256: "unchanged-hash",
+        deleted_at: null,
+      });
+      expect(migrate(db)).toEqual({ applied: 0, version: 3 });
+    } finally {
+      db.close();
     }
   });
 

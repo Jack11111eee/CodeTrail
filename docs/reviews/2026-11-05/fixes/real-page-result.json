@@ -1,0 +1,28 @@
+{
+  "ok": true,
+  "model": "deepseek-v4.1-flash",
+  "pages": [
+    "/openwiki/quickstart.md"
+  ],
+  "totals": {
+    "calls": 9,
+    "inputTokens": 38701,
+    "outputTokens": 2562,
+    "costCents": null
+  },
+  "activities": [
+    {
+      "stage": "planning"
+    },
+    {
+      "stage": "generating",
+      "page": "/openwiki/quickstart.md"
+    },
+    {
+      "stage": "finalizing"
+    }
+  ],
+  "result": {
+    "skipped": false
+  }
+}

@@ -172,19 +172,19 @@ export function createConversationsRepo(db: Database): ConversationsRepo {
   );
   const messagesAscStmt = db.raw.prepare(
     `${MESSAGE_COLUMNS} WHERE conversation_id = ?
-     ORDER BY created_at ASC, message_id ASC`,
+     ORDER BY created_at ASC, rowid ASC`,
   );
   const messagesBeforeAscStmt = db.raw.prepare(
     `${MESSAGE_COLUMNS} WHERE conversation_id = ? AND created_at < ?
-     ORDER BY created_at ASC, message_id ASC`,
+     ORDER BY created_at ASC, rowid ASC`,
   );
   const messagesDescStmt = db.raw.prepare(
     `${MESSAGE_COLUMNS} WHERE conversation_id = ?
-     ORDER BY created_at DESC, message_id DESC LIMIT ?`,
+     ORDER BY created_at DESC, rowid DESC LIMIT ?`,
   );
   const messagesBeforeDescStmt = db.raw.prepare(
     `${MESSAGE_COLUMNS} WHERE conversation_id = ? AND created_at < ?
-     ORDER BY created_at DESC, message_id DESC LIMIT ?`,
+     ORDER BY created_at DESC, rowid DESC LIMIT ?`,
   );
   const insertSelectionStmt = db.raw.prepare(
     `INSERT INTO conversation_selections (conversation_id, lesson_id, module_id,
@@ -267,6 +267,23 @@ export function createConversationsRepo(db: Database): ConversationsRepo {
     ): MessageRecord[] {
       const before = opts?.before ?? null;
       const limit = opts?.limit;
+      // A message id cursor includes the insertion-order tie-breaker. Legacy
+      // timestamp cursors remain accepted for existing callers.
+      if (before?.startsWith("m_")) {
+        const rows = db.raw
+          .prepare(
+            `${MESSAGE_COLUMNS} WHERE conversation_id = ?
+          AND (created_at, rowid) < (SELECT created_at, rowid FROM messages WHERE message_id = ? AND conversation_id = ?)
+          ORDER BY created_at ${limit === undefined ? "ASC" : "DESC"}, rowid ${limit === undefined ? "ASC" : "DESC"}${limit === undefined ? "" : " LIMIT ?"}`,
+          )
+          .all(
+            id,
+            before,
+            id,
+            ...(limit === undefined ? [] : [limit]),
+          ) as MessageRow[];
+        return (limit === undefined ? rows : rows.reverse()).map(toMessage);
+      }
       if (limit === undefined) {
         const rows =
           before === null

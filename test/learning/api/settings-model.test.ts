@@ -40,6 +40,7 @@ function configFrom(settings: ModelSettings): GenerationConfig {
     model: {
       provider: settings.provider,
       model: settings.model,
+      ...(settings.baseUrl ? { baseUrl: settings.baseUrl } : {}),
       maxOutputTokens: settings.maxOutputTokens,
       temperature: settings.temperature,
     },
@@ -92,6 +93,56 @@ describe("GET /api/settings/model", () => {
 });
 
 describe("PUT /api/settings/model", () => {
+  it("saves, retains and clears a normalized Base URL and changes the analysis identity", async () => {
+    const put = (baseUrl?: string | null) =>
+      harness!.request("/api/settings/model", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          provider: "anthropic",
+          model: "gateway-model",
+          ...(baseUrl === undefined ? {} : { baseUrl }),
+        }),
+      });
+    const first = jsonOf<ModelSettingsView>(
+      await put(" https://gateway.example/anthropic/ "),
+    );
+    expect(first.baseUrl).toBe("https://gateway.example/anthropic");
+    expect(
+      jsonOf<ModelSettingsView>(await harness!.request("/api/settings/model"))
+        .baseUrl,
+    ).toBe(first.baseUrl);
+    const hash = computeConfigHash(configFrom(server!.repos.settings.model()!));
+    expect(jsonOf<ModelSettingsView>(await put()).baseUrl).toBe(first.baseUrl);
+    await put("https://other.example");
+    expect(
+      computeConfigHash(configFrom(server!.repos.settings.model()!)),
+    ).not.toBe(hash);
+    expect(jsonOf<ModelSettingsView>(await put("")).baseUrl).toBeNull();
+    await put("https://gateway.example");
+    expect(jsonOf<ModelSettingsView>(await put(null)).baseUrl).toBeNull();
+  });
+
+  it.each([
+    "not-a-url",
+    "file:///tmp/model",
+    "https://user:secret@gateway.example",
+    "https://gateway.example?key=secret",
+    "https://gateway.example#section",
+  ])("rejects invalid Base URL %s without saving it", async (baseUrl) => {
+    const response = await harness!.request("/api/settings/model", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        provider: "anthropic",
+        model: "gateway-model",
+        baseUrl,
+      }),
+    });
+    expect(response.status).toBe(400);
+    expect(server!.repos.settings.model()).toBeNull();
+  });
+
   it("persists provider, model, quota and pricing and reports them back", async () => {
     const view = jsonOf<ModelSettingsView>(
       await harness!.request("/api/settings/model", {

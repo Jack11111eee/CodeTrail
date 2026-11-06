@@ -97,6 +97,7 @@ function defaultAnalysisConfig(repos: Repositories): GenerationConfig {
       ? {
           provider: settings.provider,
           model: settings.model,
+          ...(settings.baseUrl ? { baseUrl: settings.baseUrl } : {}),
           maxOutputTokens: settings.maxOutputTokens,
           temperature: settings.temperature,
         }

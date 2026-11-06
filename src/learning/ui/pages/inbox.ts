@@ -65,6 +65,9 @@ function itemMarkup(item: ChangeSummary): string {
     `${escapeHtml(item.streamKind)} · ` +
     `${short ? "短记录" : "完整记录"}</p>` +
     commit +
+    (item.generationId
+      ? `<a class="button" href="/learn/reader?generation=${escapeAttribute(item.generationId)}">阅读变更讲解 →</a>`
+      : `<p class="hint">${item.state === "queued" || item.state === "analyzing" ? "讲解生成后可在此阅读。" : "暂无可阅读的讲解。"}</p>`) +
     `</li>`
   );
 }
@@ -89,13 +92,17 @@ export function renderInboxPage(
 
   const body =
     `<header class="page-head"><h1>更新收件箱</h1>` +
-    `<p>项目 <code>${escapeHtml(model.projectId)}</code></p></header>` +
-    `<p class="polling-note" data-testid="polling-note">` +
-    `${escapeHtml(model.pollingNote)}</p>` +
+    `<p>${escapeHtml(model.projectName ?? "当前项目")}的行为变化与代码依据</p>${model.projects && model.projects.length > 1 ? `<label>切换项目<select data-project-switch>${model.projects.map((project) => `<option value="${escapeAttribute(project.projectId)}"${project.projectId === model.projectId ? " selected" : ""}>${escapeHtml(project.displayName)}</option>`).join("")}</select></label>` : ""}</header>` +
+    `<details class="product-note"><summary>跟进范围与轮询限制</summary><p class="polling-note" data-testid="polling-note">${escapeHtml(model.pollingNote)}</p></details>` +
     `<p class="gap-summary"><span class="gap-badge" data-testid="inbox-gap-badge" ` +
     `data-gap-count="${String(gapCount)}">缺口 ${String(gapCount)}</span></p>` +
     `<ul class="inbox-list" data-testid="inbox-list">${list}</ul>` +
     next;
 
-  return renderPageShell(ctx, "更新收件箱", "inbox", body);
+  return renderPageShell(
+    { ...ctx, projectId: model.projectId },
+    "更新收件箱",
+    "inbox",
+    body,
+  );
 }

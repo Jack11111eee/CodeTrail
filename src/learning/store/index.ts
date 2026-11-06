@@ -1,3 +1,4 @@
+import { createTopicsRepo } from "./topics.repo.js";
 import type { Database, Repositories } from "../contracts/index.js";
 import { createAttemptsRepo } from "./attempts.repo.js";
 import { createChangesRepo } from "./changes.repo.js";
@@ -44,6 +45,7 @@ export function createRepositories(db: Database): Repositories {
     attempts: createAttemptsRepo(db),
     generations: createGenerationsRepo(db),
     lessons: createLessonsRepo(db),
+    topics: createTopicsRepo(db),
     sources: createSourcesRepo(db),
     conversations: createConversationsRepo(db),
     cursors: createCursorsRepo(db),

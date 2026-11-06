@@ -309,8 +309,11 @@ export async function ensureBuildWorktree(
   if (await objectExists(target)) {
     await git(handle.path, ["worktree", "remove", "--force", target]);
     await removeTree(target);
-    await git(handle.path, ["worktree", "prune"]);
   }
+
+  // Cancellation/crash cleanup can remove the directory while Git still
+  // registers it. Prune that missing path even when there is nothing to unlink.
+  await git(handle.path, ["worktree", "prune", "--expire", "now"]);
 
   await mkdir(stagingPath(paths, jobId), { recursive: true, mode: 0o700 });
   const result = await git(handle.path, [

@@ -563,7 +563,7 @@ import type { OpenWikiRunEvent } from "../../src/agent/types.ts";
  * @returns Complete ordered event stream emitted by the runner.
  */
 async function runHarness(
-  options: { pageConcurrency?: number } = {},
+  options: { pageConcurrency?: number; retainIncompleteRun?: boolean } = {},
 ): Promise<OpenWikiRunEvent[]> {
   const events: OpenWikiRunEvent[] = [];
   await runNativeRepositoryGeneration({
@@ -572,6 +572,7 @@ async function runHarness(
     modelId: "test-model",
     model: {} as never,
     planningContext: "User and connector context",
+    retainIncompleteRun: options.retainIncompleteRun,
     onEvent: (event) => events.push(event),
     ...(options.pageConcurrency === undefined
       ? {}
@@ -846,6 +847,38 @@ describe("runNativeRepositoryGeneration", () => {
     expect(harness.finishCalls).toBe(1);
   });
 
+  test("keeps the durable plan after deferred pages while completing later modules", async () => {
+    harness.pageWorkerFailures = 2;
+    harness.planPaths = ["/openwiki/failed.md", "/openwiki/later.md"];
+    await expect(runHarness({ retainIncompleteRun: true })).rejects.toThrow(
+      "已保存",
+    );
+    expect(harness.currentRun?.state.plan?.pages.map((p) => p.status)).toEqual([
+      "skipped",
+      "complete",
+    ]);
+    expect(harness.finishCalls).toBe(0);
+  });
+
+  test.each([
+    new DOMException("stop now", "AbortError"),
+    Object.assign(new Error("budget exhausted"), { code: "budget_exhausted" }),
+  ])(
+    "does not skip or finalize pages after cancellation or a global failure: %s",
+    async (error) => {
+      harness.pageWorkerFailures = 1;
+      harness.pageWorkerFailureError = error;
+      harness.planPaths = ["/openwiki/pending.md", "/openwiki/later.md"];
+      await expect(runHarness()).rejects.toThrow(error.message);
+      expect(
+        harness.currentRun?.state.plan?.pages.map((p) => p.status),
+      ).toEqual(["pending", "pending"]);
+      expect(harness.pageRestoreCalls).toBe(0);
+      expect(harness.restoreCalls).toBe(0);
+      expect(harness.finishCalls).toBe(0);
+    },
+  );
+
   test("keeps a durably completed page after a later worker failure", async () => {
     harness.pageWorkerPostSubmitFailures = 1;
     harness.planPaths = ["/openwiki/completed.md"];
@@ -1102,14 +1135,14 @@ describe("runNativeRepositoryGeneration", () => {
 });
 
 describe("runNativeRepositoryGeneration with concurrent page workers", () => {
-  test("keeps the sequential event shape when concurrency is one", async () => {
+  test("reports success and deferred counts with sequential page progress", async () => {
     const events = await runHarness({ pageConcurrency: 1 });
 
     const progress = events.filter(
       (event) =>
         event.type === "repository_progress" && event.stage === "generating",
     );
-    expect(progress).toHaveLength(2);
+    expect(progress).toHaveLength(4);
     for (const event of progress) {
       expect(event).not.toHaveProperty("inFlightPages");
       expect(event).not.toHaveProperty("completedCount");

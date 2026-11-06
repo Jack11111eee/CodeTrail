@@ -18,7 +18,7 @@ export const UPSTREAM_VERSION = `${UPSTREAM_PACKAGE_VERSION}+${UPSTREAM_COMMIT.s
 
 export const PROMPT_TEMPLATE_VERSION = "codetrail-lesson-v1";
 export const LESSON_PIPELINE_VERSION = "lp1";
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 3;
 
 export const MAX_BODY_BYTES = 1024 * 1024;
 

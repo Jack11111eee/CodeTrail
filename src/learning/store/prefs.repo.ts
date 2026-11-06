@@ -132,6 +132,13 @@ export function createPreferencesRepo(db: Database): PreferencesRepo {
         updatedAt: row.updated_at,
       }));
     },
+    clearReadingPosition(gid: GenerationId, lessonId: LessonId): void {
+      db.raw
+        .prepare(
+          "DELETE FROM reading_positions WHERE generation_id = ? AND lesson_id = ?",
+        )
+        .run(gid, lessonId);
+    },
     putReadingPosition(pos: ReadingPosition): void {
       upsertPositionStmt.run(
         pos.generationId,

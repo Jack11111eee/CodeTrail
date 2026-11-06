@@ -5,8 +5,8 @@ import type { SealedFile } from "./ports.js";
 import type { GenerationConfig } from "./refs.js";
 import type { NormalizedScope, ScopeConfig } from "./scope.js";
 
-export const DEDUPE_KEY_VERSION = "dk1";
-export const CACHE_KEY_VERSION = "ck1";
+export const DEDUPE_KEY_VERSION = "dk2";
+export const CACHE_KEY_VERSION = "ck2";
 export const SCOPE_HASH_VERSION = "sc1";
 export const CONFIG_HASH_VERSION = "cf1";
 export const EVENT_KEY_VERSION = "ek1";
@@ -37,6 +37,8 @@ export function computeDedupeKey(i: {
 }
 
 export function computeCacheKey(i: {
+  kind?: "research" | "comparison" | "change";
+  comparisonBaseSha?: string | null;
   repoIdentity: string;
   targetCommitSha: string;
   baseContextSha: string | null;
@@ -48,6 +50,8 @@ export function computeCacheKey(i: {
 }): string {
   return digest([
     CACHE_KEY_VERSION,
+    i.kind ?? "research",
+    i.comparisonBaseSha ?? "",
     i.repoIdentity,
     i.targetCommitSha,
     i.baseContextSha ?? "",
@@ -75,6 +79,7 @@ export function computeConfigHash(c: GenerationConfig): string {
     model: {
       provider: c.model.provider,
       model: c.model.model,
+      ...(c.model.baseUrl ? { baseUrl: c.model.baseUrl } : {}),
       maxOutputTokens: c.model.maxOutputTokens,
       temperature: c.model.temperature,
     },

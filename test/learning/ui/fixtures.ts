@@ -477,7 +477,7 @@ export function staticDeps(paths: DataPaths): AppDeps {
       byId: () => null,
       listByProject: () => [],
     },
-    jobs: { listByProject: () => [] },
+    jobs: { listByProject: () => [], listByState: () => [] },
     settings: { model: () => null },
     usage: { groupByKind: () => [] },
     prefs: {
@@ -492,6 +492,11 @@ export function staticDeps(paths: DataPaths): AppDeps {
     terms: { list: () => [] },
     changes: { page: () => ({ items: [], next: null }) },
     lessons: { listByGeneration: () => [] },
+    topics: {
+      listByProject: () => [],
+      listByGeneration: () => [],
+      byId: () => null,
+    },
     conversations: {
       byId: () => null,
       messages: () => [],

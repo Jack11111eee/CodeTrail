@@ -9,6 +9,7 @@
  */
 
 import { z } from "zod";
+import { normalizeModelBaseUrl } from "../config/model-url.js";
 
 import { LearningError, errorMessageFor } from "../contracts/index.js";
 import type { RouteHandlerKey } from "../contracts/index.js";
@@ -38,6 +39,20 @@ function fromZod(error: z.ZodError): LearningError {
 
 const id = z.string().min(1).max(512);
 const nonEmptyString = z.string().min(1);
+const modelBaseUrl = z
+  .string()
+  .trim()
+  .max(2048)
+  .nullable()
+  .refine((value) => {
+    try {
+      normalizeModelBaseUrl(value);
+      return true;
+    } catch {
+      return false;
+    }
+  }, "Base URL 必须是 HTTP(S) 服务地址，不能包含账号、密码、查询参数或片段。")
+  .optional();
 
 const scope = z
   .object({
@@ -55,6 +70,7 @@ const generationConfig = z
       .object({
         provider: nonEmptyString,
         model: nonEmptyString,
+        baseUrl: modelBaseUrl,
         maxOutputTokens: z.number().int().positive(),
         temperature: z.number().min(0),
       })
@@ -187,6 +203,8 @@ const putPreferencesBody = z
 
 const putModelSettingsBody = z
   .object({
+    apiKey: z.string().trim().min(1).max(8192).optional(),
+    baseUrl: modelBaseUrl,
     provider: nonEmptyString,
     model: nonEmptyString,
     maxOutputTokens: z.number().int().positive().optional(),
@@ -243,8 +261,18 @@ export const REQ_SCHEMAS: Readonly<
 > = Object.freeze({
   "projects.create": { body: createProjectBody },
   "projects.delete": { query: deleteProjectQuery },
+  "generations.lesson.delete": { query: deleteProjectQuery },
+  "generations.lesson.restore": { body: z.object({}).strict() },
   "analyses.create": { body: createAnalysisBody },
   "comparisons.create": { body: createComparisonBody },
+  "topics.create": {
+    body: z.object({ title: z.string().trim().max(80).optional() }).strict(),
+  },
+  "topics.messages": {
+    body: postMessageBody.extend({ text: z.string().trim().min(1).max(16000) }),
+  },
+  "topics.delete": { query: deleteProjectQuery },
+  "topics.restore": { body: z.object({}).strict() },
   "conversations.create": { body: createConversationBody },
   "conversations.messages": { query: messageListQuery },
   "conversations.post": { body: postMessageBody },
@@ -253,6 +281,14 @@ export const REQ_SCHEMAS: Readonly<
   "preferences.put": { body: putPreferencesBody },
   "terms.list": { query: termsListQuery },
   "settings.model.put": { body: putModelSettingsBody },
+  "settings.model.test": {
+    body: putModelSettingsBody.pick({
+      provider: true,
+      model: true,
+      baseUrl: true,
+      apiKey: true,
+    }),
+  },
   "usage.get": { query: usageQuery },
 });
 

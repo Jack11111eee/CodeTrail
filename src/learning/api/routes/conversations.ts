@@ -248,7 +248,7 @@ const listMessages: HandlerFactory = (deps) => async (req) => {
   let nextBefore: string | null = null;
   if (limit !== null && rows.length > limit) {
     page = rows.slice(rows.length - limit);
-    nextBefore = page[0]?.createdAt ?? null;
+    nextBefore = page[0]?.messageId ?? null;
   }
 
   const availabilityOf = availabilityResolver(deps, snapshot.generationIds);

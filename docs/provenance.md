@@ -75,14 +75,18 @@ self-test exercise a copy instead of the working tree.
 
 ## Allowed modifications
 
-The fork may touch at most 12 upstream paths; it currently records 10, each with a
-reason in `UPSTREAM_BASE.json.allowedModifications`:
+The fork may touch only the upstream paths listed in
+`UPSTREAM_BASE.json.allowedModifications`; it currently records 15, each with a
+reason in that file and summarized here:
 
 | Path | Why |
 | --- | --- |
 | `src/ingestion/code-mode.ts` | adds `writeRepoFiles?: boolean` (default `true`) so the learning module can suppress repository-file writes |
 | `src/generation/repository-run.ts` | forwards `writeRepoFiles` to `ensureCodeModeRepoSetup` at the call site inside `beginRepositoryRun` |
 | `src/agent/repository-runner.ts` | forwards `writeRepoFiles` from `NativeRepositoryGenerationOptions` |
+| `src/agent/types.ts` | adds host-authored progress `message`/`failure` fields and successful/skipped page counts for the learning UI |
+| `test/agent/repository-runner.test.ts` | covers retained incomplete runs, page failure classification and real progress counts |
+| `test/generation/repository-run.test.ts` | covers the `onDocumentsReady` checkpoint handoff |
 | `package.json` | fork script table, `files` excludes `dist/learning/testing`, description notes the fork |
 | `tsconfig.json` | server project includes `src/learning/**/*.ts` and excludes the DOM client entry, so DOM code never type-checks against the server libs |
 | `tsconfig.client.json` | compiles `src/learning/ui/client.ts` against the DOM libs |

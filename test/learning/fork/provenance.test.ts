@@ -46,6 +46,10 @@ const EXPECTED_ALLOWED_MODIFICATIONS = [
   // The generated fixture tree must stay outside test discovery and linting.
   "vitest.config.ts",
   "eslint.config.js",
+  // Host-authored progress fields for the learning UI, with their coverage.
+  "src/agent/types.ts",
+  "test/agent/repository-runner.test.ts",
+  "test/generation/repository-run.test.ts",
 ];
 
 interface Manifest {
@@ -321,7 +325,7 @@ describe("--report", () => {
     expect(report.counts.unexpected).toBe(0);
     expect(report.counts.missing).toBe(0);
     expect(report.allowedModifications.length).toBeGreaterThan(0);
-    expect(report.allowedModifications.length).toBeLessThanOrEqual(12);
+    expect(report.allowedModifications.length).toBeLessThanOrEqual(15);
     expect(report.allowedModifications.map((entry) => entry.path).sort()).toEqual(
       [...EXPECTED_ALLOWED_MODIFICATIONS].sort(),
     );

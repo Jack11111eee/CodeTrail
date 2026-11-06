@@ -1,3 +1,4 @@
+import { latestProjectJob } from "../jobs/project-job.js";
 /**
  * Project routes: import, list/detail, dependents, confirmed removal and the
  * two analysis submissions (architecture §5, §7.2, §7.5, §14.1, §3.8).
@@ -69,6 +70,7 @@ import {
 import { loadCredential } from "../../config/credentials.js";
 import {
   cloneMirror,
+  fetchMirror,
   createRemovalService,
   displayNameOf,
   git,
@@ -123,16 +125,6 @@ export const routes: readonly RouteDef[] = [
     handler: "comparisons.create",
   },
 ];
-
-const ALL_JOB_STATES: readonly JobState[] = Object.freeze([
-  "queued",
-  "running",
-  "cancelling",
-  "completed",
-  "failed",
-  "cancelled",
-  "interrupted",
-]);
 
 const DEFAULT_GITHUB_API_BASE_URL = "https://api.github.com";
 const DONE_STATE: JobState = "completed";
@@ -238,11 +230,6 @@ export function readCoverageReport(
   };
 }
 
-function latestJobState(deps: AppDeps, projectId: ProjectId): JobState | null {
-  const jobs = deps.repos.jobs.listByProject(projectId, [...ALL_JOB_STATES]);
-  return jobs.length === 0 ? null : (jobs[jobs.length - 1]).state;
-}
-
 /** Projects a stored row plus its latest successful research generation. */
 export function toProjectSummary(
   deps: AppDeps,
@@ -251,7 +238,11 @@ export function toProjectSummary(
   const generation = deps.repos.generations.latestPublished(project.repoId, {
     kind: "research",
   });
+  const job = latestProjectJob(deps.repos, project);
   return {
+    generationId: generation?.generationId ?? null,
+    latestJobId: job?.jobId ?? null,
+    latestJobResumeAvailable: job?.progress?.resumeAvailable === true,
     projectId: project.projectId,
     repoId: project.repoId,
     kind: project.kind,
@@ -259,7 +250,7 @@ export function toProjectSummary(
     defaultBranch: project.defaultBranch,
     analyzedCommitSha: generation?.commitSha ?? null,
     lastSuccessAt: generation?.publishedAt ?? null,
-    latestJobState: latestJobState(deps, project.projectId),
+    latestJobState: job?.state ?? null,
     watchEnabled: project.watchEnabled,
   };
 }
@@ -468,13 +459,14 @@ export function assertNotPathLike(value: string, field: string): void {
 }
 
 function defaultGenerationConfig(deps: AppDeps): GenerationConfig {
-  const settings = deps.repos.settings.model();
+  const settings = deps.model?.settings ?? deps.repos.settings.model();
   return {
     language: "zh",
     model: settings
       ? {
           provider: settings.provider,
           model: settings.model,
+          ...(settings.baseUrl ? { baseUrl: settings.baseUrl } : {}),
           maxOutputTokens: settings.maxOutputTokens,
           temperature: settings.temperature,
         }
@@ -522,9 +514,12 @@ function cacheKeyFor(
   baseContextSha: string | null,
   scopeHash: string,
   config: GenerationConfig,
+  comparisonBaseSha: string | null = null,
 ): string {
   const repo = deps.repos.repos.byId(repoId);
   return computeCacheKey({
+    kind: comparisonBaseSha === null ? "research" : "comparison",
+    comparisonBaseSha,
     repoIdentity: repo?.identity ?? `local:${deps.paths.root}`,
     targetCommitSha: commitSha,
     baseContextSha,
@@ -576,7 +571,17 @@ const createAnalysis: HandlerFactory = (deps) => async (req) => {
   assertNotPathLike(body.ref, "ref");
   requireModel(deps);
 
-  const commitSha = await deps.snapshotService.resolve(project.repoId, body.ref);
+  const repo = deps.repos.repos.byId(project.repoId);
+  if (repo && project.kind === "local" && repo.identity.startsWith("local:")) {
+    await fetchMirror(deps.paths, project.repoId, {
+      remoteUrl: repo.identity.slice(6),
+      refspecs: ["+refs/heads/*:refs/heads/*", "+refs/tags/*:refs/tags/*"],
+    });
+  }
+  const commitSha = await deps.snapshotService.resolve(
+    project.repoId,
+    body.ref,
+  );
   await deps.snapshotService.ensure(project.repoId, commitSha);
 
   const scope = normalizeScope(body.scope);
@@ -630,7 +635,10 @@ const createComparison: HandlerFactory = (deps) => async (req) => {
   assertNotPathLike(body.headSha, "headSha");
   requireModel(deps);
 
-  const baseSha = await deps.snapshotService.resolve(project.repoId, body.baseSha);
+  const baseSha = await deps.snapshotService.resolve(
+    project.repoId,
+    body.baseSha,
+  );
   const headSha = await deps.snapshotService.resolve(
     project.repoId,
     body.headSha,
@@ -679,6 +687,7 @@ const createComparison: HandlerFactory = (deps) => async (req) => {
         mergeBase,
         scope.hash,
         config,
+        baseSha,
       ),
     );
 

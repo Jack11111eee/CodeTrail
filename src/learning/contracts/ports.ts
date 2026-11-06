@@ -1,3 +1,5 @@
+import type { LearningTopicsRepo } from "./topics.js";
+import type { GenerationConfig } from "./refs.js";
 import type { UsageKind } from "./api.js";
 import type { CursorUpdate } from "./cursor.js";
 import { LearningError } from "./errors.js";
@@ -213,6 +215,8 @@ export interface EnqueueJobInput {
 }
 
 export interface JobRunner {
+  /** Wake the durable queued-job dispatcher after a discovery transaction. */
+  wake?(): void;
   /** Idempotent on dedupe_key. */
   enqueue(input: EnqueueJobInput): Promise<JobRecord>;
   get(jobId: JobId): Promise<JobRecord | null>;
@@ -462,9 +466,11 @@ export interface AnswerRequest {
   text: string;
   selection: QaSelection | null;
   signal: AbortSignal;
+  topic?: { title: string | null; suggestTitle: boolean; initial: boolean };
 }
 
 export type AnswerEvent =
+  | { type: "topic_title"; title: string }
   | { type: "start"; messageId: MessageId }
   | { type: "delta"; text: string }
   | { type: "citation"; sourceId: SourceId; label: string; commitSha: string }
@@ -556,6 +562,7 @@ export interface Repositories {
   snapshots: SnapshotsRepo;
   generations: GenerationsRepo;
   lessons: LessonsRepo;
+  topics: LearningTopicsRepo;
   sources: SourcesRepo;
   conversations: ConversationsRepo;
   changes: ChangesRepo;
@@ -569,6 +576,8 @@ export interface Repositories {
 }
 
 export interface JobRunnerDeps {
+  /** Resolve a provider from the configuration captured by the submitted job. */
+  modelForConfig?(config: GenerationConfig): ModelHandle;
   db: Database;
   repos: Repositories;
   paths: DataPaths;
@@ -632,6 +641,13 @@ export type RouteHandlerKey =
   | "jobs.retry"
   | "generations.lessons"
   | "generations.lesson"
+  | "generations.lesson.delete"
+  | "generations.lesson.restore"
+  | "topics.create"
+  | "topics.get"
+  | "topics.messages"
+  | "topics.delete"
+  | "topics.restore"
   | "generations.source"
   | "generations.coverage"
   | "conversations.create"
@@ -647,6 +663,7 @@ export type RouteHandlerKey =
   | "terms.get"
   | "settings.model.get"
   | "settings.model.put"
+  | "settings.model.test"
   | "usage.get"
   | "storage.get";
 
@@ -690,7 +707,8 @@ export interface RouteModule {
     | "terms"
     | "settings"
     | "ops"
-    | "changes";
+    | "changes"
+    | "topics";
   readonly routes: readonly RouteDef[];
   readonly handlers: Partial<Record<RouteHandlerKey, HandlerFactory>>;
 }

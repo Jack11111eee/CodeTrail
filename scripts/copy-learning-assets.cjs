@@ -16,8 +16,33 @@ const path = require("node:path");
 /** Browser assets required by the compiled learning UI. */
 const ASSETS = [
   {
-    source: path.resolve(__dirname, "..", "src", "learning", "ui", "styles.css"),
-    destination: path.resolve(__dirname, "..", "dist", "learning", "ui", "styles.css"),
+    source: path.resolve(__dirname, "..", "src", "learning", "ui", "theme.js"),
+    destination: path.resolve(
+      __dirname,
+      "..",
+      "dist",
+      "learning",
+      "ui",
+      "theme.js",
+    ),
+  },
+  {
+    source: path.resolve(
+      __dirname,
+      "..",
+      "src",
+      "learning",
+      "ui",
+      "styles.css",
+    ),
+    destination: path.resolve(
+      __dirname,
+      "..",
+      "dist",
+      "learning",
+      "ui",
+      "styles.css",
+    ),
   },
 ];
 

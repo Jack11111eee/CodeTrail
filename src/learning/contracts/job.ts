@@ -47,4 +47,28 @@ export interface JobProgress {
   done: number;
   total: number | null;
   message?: string;
+  /** Durable, bounded display history; never raw model output or tool input. */
+  activities?: JobActivity[];
+  seq?: number;
+  updatedAt?: string;
+  commitSha?: string;
+  pages?: {
+    done: number;
+    total: number | null;
+    current?: string;
+    processed?: number;
+    skipped?: number;
+  };
+  pageFailures?: { page: string; code: string; message: string }[];
+  cacheHit?: boolean;
+  /** The job has committed a reusable build checkpoint. */
+  resumeAvailable?: boolean;
+}
+
+export interface JobActivity {
+  seq: number;
+  at: string;
+  attempt: number;
+  phase: JobProgress["phase"];
+  message: string;
 }

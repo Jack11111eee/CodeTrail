@@ -22,16 +22,3 @@
   页面之间导航。PRD 未要求按页面扇出，因此不阻塞 v1。
 - 复现: `pnpm run test:learning -- test/learning/lessons/builder-flows.test.ts`
 - 状态: 已知，v1 接受。
-
-### KI-03 跟进发现的变更任务不会自动开始执行
-
-- 现象: `commitDiscovery` 在事务里直接用 `insertJobRow` 写入 `queued` 状态的
-  `change_analysis` 任务；而 `JobRunner` 的待执行队列只在 `enqueue()` / `retry()`
-  被调用时才加入任务，发现流程并不调用它，重启时的 `recoverInterrupted()` 也只
-  处理 `running` / `cancelling`。因此跟进（watch tick）产生的变更任务会一直停在
-  `queued`，除非有人显式推动它。
-- 影响: 跟进流程；事件、游标与收件箱记录都正确落库，但“发现即分析”这一环需要
-  外部推动。`test/learning/phase/d-gate.test.ts` 的跟进流程因此自行把 `queued`
-  任务交给生产 `executeJob` 执行，以验证分析与发布逻辑本身。
-- 复现: `pnpm run test:learning -- test/learning/phase/d-gate.test.ts`
-- 状态: 已知，v1 接受；后续把发现产生的任务接入 runner 队列即可修复。

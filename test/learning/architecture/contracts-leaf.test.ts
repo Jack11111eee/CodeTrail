@@ -723,7 +723,7 @@ describe("contract layer is a leaf", () => {
       "utf8",
     );
     const modules = contractFiles().filter((name) => name !== "index.ts");
-    expect(modules).toHaveLength(17);
+    expect(modules).toHaveLength(18);
     for (const moduleFile of modules) {
       const base = moduleFile.slice(0, -".ts".length);
       expect(barrel, `${moduleFile} must be reachable from index.ts`).toMatch(

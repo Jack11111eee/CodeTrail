@@ -12,7 +12,11 @@
  * that cannot be retried surfaces the runner's `job_not_retryable` (409).
  */
 
-import { LearningError, errorMessageFor, RETRYABLE_JOB_STATES } from "../../contracts/index.js";
+import {
+  LearningError,
+  errorMessageFor,
+  RETRYABLE_JOB_STATES,
+} from "../../contracts/index.js";
 import type {
   AppDeps,
   HandlerFactory,
@@ -141,6 +145,7 @@ async function* jobEvents(
       at: initial.createdAt,
       type: "state",
       state: initial.state,
+      ...(initial.progress ? { progress: initial.progress } : {}),
     };
     if (TERMINAL_STATES.has(initial.state)) return;
 

@@ -1,3 +1,6 @@
+import { repoSourceId } from "../../evidence/registry.js";
+import { readWikiCitation } from "../../qa/wiki-citation.js";
+import { lessonTitle } from "../../lessons/title.js";
 /**
  * Published generation reads: lesson list/detail, one source and the coverage
  * report (architecture §5.8, §6.3, §9, §14.1, §3.8).
@@ -19,7 +22,11 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import { LearningError, errorMessageFor, sliceLines } from "../../contracts/index.js";
+import {
+  LearningError,
+  errorMessageFor,
+  sliceLines,
+} from "../../contracts/index.js";
 import type {
   AppDeps,
   CoverageReport,
@@ -64,6 +71,18 @@ export const routes: readonly RouteDef[] = [
     handler: "generations.lesson",
   },
   {
+    method: "DELETE",
+    pattern: "/api/generations/:id/lessons/:lessonId",
+    auth: "session",
+    handler: "generations.lesson.delete",
+  },
+  {
+    method: "POST",
+    pattern: "/api/generations/:id/lessons/:lessonId/restore",
+    auth: "session",
+    handler: "generations.lesson.restore",
+  },
+  {
     method: "GET",
     pattern: "/api/generations/:id/sources/:sourceId",
     auth: "session",
@@ -81,7 +100,11 @@ export const routes: readonly RouteDef[] = [
 const MAX_SOURCE_BYTES = 1024 * 1024;
 
 function notFound(details: Record<string, unknown>): LearningError {
-  return new LearningError("not_found", errorMessageFor("not_found", "zh"), details);
+  return new LearningError(
+    "not_found",
+    errorMessageFor("not_found", "zh"),
+    details,
+  );
 }
 
 function unpublished(generation: GenerationRecord): LearningError {
@@ -215,7 +238,7 @@ function toLessonSummary(
   return {
     lessonId: row.lessonId,
     kind: row.kind,
-    title: row.title,
+    title: lessonTitle(row.title, row.kind, lesson),
     moduleIds: lesson?.context.moduleIds ?? [],
     hasCoverageGaps: (lesson?.coverageGaps.length ?? 0) > 0,
   };
@@ -282,6 +305,20 @@ const getLesson: HandlerFactory = (deps) => (req) => {
   const lessonId = req.params.lessonId as LessonId;
   const row = deps.repos.lessons.byId(generation.generationId, lessonId);
   if (row === null) {
+    if (
+      deps.repos.lessons.byId(generation.generationId, lessonId, {
+        includeDeleted: true,
+      })?.deletedAt
+    )
+      throw new LearningError(
+        "source_removed",
+        "这篇讲解已删除，可在学习目录中恢复",
+        {
+          reason: "lesson_deleted",
+          generationId: generation.generationId,
+          lessonId,
+        },
+      );
     const owner = ownerGenerationOfLesson(deps, lessonId);
     if (owner !== null && owner !== generation.generationId) {
       throw versionMismatch("讲解不属于该生成版本", {
@@ -320,6 +357,57 @@ const getLesson: HandlerFactory = (deps) => (req) => {
   return Promise.resolve({ kind: "json", status: 200, body });
 };
 
+/** Visibility is mutable metadata; sealed lesson/evidence bytes stay immutable. */
+function lessonVisibility(deleted: boolean): HandlerFactory {
+  return (deps) => (req) => {
+    const generation = requirePublishedGeneration(
+      deps,
+      req.params.id as GenerationId,
+    );
+    const lessonId = req.params.lessonId as LessonId;
+    const row = deps.repos.lessons.byId(generation.generationId, lessonId, {
+      includeDeleted: true,
+    });
+    if (!row) {
+      const owner = ownerGenerationOfLesson(deps, lessonId);
+      if (owner && owner !== generation.generationId)
+        throw versionMismatch("讲解不属于该生成版本", {
+          lessonId,
+          generationId: generation.generationId,
+        });
+      throw notFound({ lessonId, generationId: generation.generationId });
+    }
+    if (deleted && req.query.confirm !== "true")
+      throw new LearningError("invalid_input", "请确认删除这篇讲解", {
+        reason: "confirm_required",
+      });
+    deps.db.transaction(() => {
+      deps.repos.lessons.setDeleted(
+        generation.generationId,
+        lessonId,
+        deleted ? deps.clock.now().toISOString() : null,
+      );
+      if (deleted)
+        deps.repos.prefs.clearReadingPosition(
+          generation.generationId,
+          lessonId,
+        );
+    });
+    return Promise.resolve({
+      kind: "json",
+      status: 200,
+      body: {
+        generationId: generation.generationId,
+        lessonId,
+        deleted,
+        nextLessonId:
+          deps.repos.lessons.listByGeneration(generation.generationId)[0]
+            ?.lessonId ?? null,
+      },
+    });
+  };
+}
+
 // ── sources ─────────────────────────────────────────────────────────────────
 
 function sourceLabel(ref: SourceRef): string {
@@ -332,14 +420,66 @@ function sourceLabel(ref: SourceRef): string {
   return ref.label;
 }
 
-const getSource: HandlerFactory = (deps) => async (req) => {
-  const generation = requirePublishedGeneration(
-    deps,
-    req.params.id as GenerationId,
-  );
-  const sourceId = req.params.sourceId as SourceId;
+export async function readSourceView(
+  deps: AppDeps,
+  generationId: GenerationId,
+  sourceId: SourceId,
+): Promise<SourceView> {
+  const generation = requirePublishedGeneration(deps, generationId);
   const row = deps.repos.sources.get(generation.generationId, sourceId);
   if (row === null) {
+    const wiki = readWikiCitation(
+      generationKnowledgeDir(deps, generation.contentDir),
+      generation.generationId,
+      sourceId,
+    );
+    if (wiki)
+      return {
+        generationId: generation.generationId,
+        sourceId,
+        kind: "repo",
+        commitSha: generation.commitSha,
+        label: wiki.label,
+        content: wiki.content.slice(0, MAX_SOURCE_BYTES),
+        lines: null,
+        truncated: wiki.content.length > MAX_SOURCE_BYTES,
+        availability: "available",
+      };
+    // Compatibility for earlier QA turns that read the whole of a file
+    // registered by analysis only as line ranges. Match its immutable ID.
+    for (const candidate of deps.repos.sources.all(generation.generationId)) {
+      let ref: SourceRef;
+      try {
+        ref = JSON.parse(candidate.payloadJson) as SourceRef;
+      } catch {
+        continue;
+      }
+      if (
+        ref.kind !== "repo" ||
+        repoSourceId(ref.path, ref.commitSha, null) !== sourceId
+      )
+        continue;
+      const snapshot = await deps.snapshotService.ensure(
+        ref.repoId,
+        ref.commitSha,
+      );
+      const content = await deps.snapshotService.readFile(
+        snapshot,
+        ref.path,
+        projectScope(deps, generation),
+      );
+      return {
+        generationId: generation.generationId,
+        sourceId,
+        kind: "repo",
+        commitSha: ref.commitSha,
+        label: `${ref.path}@${ref.commitSha.slice(0, 12)}`,
+        content: content.slice(0, MAX_SOURCE_BYTES),
+        lines: null,
+        truncated: content.length > MAX_SOURCE_BYTES,
+        availability: "available",
+      };
+    }
     const owner = ownerGenerationOfSource(deps, sourceId);
     if (owner !== null && owner !== generation.generationId) {
       throw versionMismatch("来源不属于该生成版本", {
@@ -399,8 +539,18 @@ const getSource: HandlerFactory = (deps) => async (req) => {
     truncated,
     availability,
   };
-  return { kind: "json", status: 200, body };
-};
+  return body;
+}
+
+const getSource: HandlerFactory = (deps) => async (req) => ({
+  kind: "json",
+  status: 200,
+  body: await readSourceView(
+    deps,
+    req.params.id as GenerationId,
+    req.params.sourceId as SourceId,
+  ),
+});
 
 // ── coverage ────────────────────────────────────────────────────────────────
 
@@ -421,6 +571,8 @@ const getCoverage: HandlerFactory = (deps) => (req) => {
 export const handlers: Partial<Record<RouteHandlerKey, HandlerFactory>> = {
   "generations.lessons": listLessons,
   "generations.lesson": getLesson,
+  "generations.lesson.delete": lessonVisibility(true),
+  "generations.lesson.restore": lessonVisibility(false),
   "generations.source": getSource,
   "generations.coverage": getCoverage,
 };

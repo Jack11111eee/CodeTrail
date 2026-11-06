@@ -651,6 +651,18 @@
     {
       "path": "eslint.config.js",
       "reason": "fork patch: ignores gains .tmp/** and **/.tmp/** so the generated fixture trees, with their third-party and deliberately malformed source, are not linted; a scoped **/*.mjs block supplies Node runtime globals for the ESM scripts; all other lint rules and file globs are unchanged"
+    },
+    {
+      "path": "src/agent/types.ts",
+      "reason": "fork patch: RepositoryGenerationProgressEvent gains host-authored message/failure fields and successful/skipped counts so learning job progress can report real page outcomes without exposing model narration or provider bodies"
+    },
+    {
+      "path": "test/agent/repository-runner.test.ts",
+      "reason": "fork patch: covers retained incomplete runs, page failure classification and real success/skipped progress counts added for the learning module"
+    },
+    {
+      "path": "test/generation/repository-run.test.ts",
+      "reason": "fork patch: covers the onDocumentsReady checkpoint handoff before the native run state is removed"
     }
   ]
 }

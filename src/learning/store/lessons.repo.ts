@@ -15,10 +15,11 @@ interface LessonDbRow {
   rel_path: string;
   json_sha256: string;
   published_at: string;
+  deleted_at: string | null;
 }
 
 const SELECT_COLUMNS = `SELECT lesson_id, generation_id, kind, title, rel_path,
-  json_sha256, published_at FROM lessons`;
+  json_sha256, published_at, deleted_at FROM lessons`;
 
 function toRecord(row: LessonDbRow): LessonRow {
   return {
@@ -29,6 +30,7 @@ function toRecord(row: LessonDbRow): LessonRow {
     relPath: row.rel_path,
     jsonSha256: row.json_sha256,
     publishedAt: row.published_at,
+    ...(row.deleted_at ? { deletedAt: row.deleted_at } : {}),
   };
 }
 
@@ -60,12 +62,30 @@ export function createLessonsRepo(db: Database): LessonsRepo {
         );
       }
     },
-    listByGeneration(gid: GenerationId): LessonRow[] {
-      return (listStmt.all(gid) as LessonDbRow[]).map(toRecord);
+    listByGeneration(
+      gid: GenerationId,
+      opts?: { includeDeleted?: boolean },
+    ): LessonRow[] {
+      return (listStmt.all(gid) as LessonDbRow[])
+        .filter((row) => opts?.includeDeleted || row.deleted_at === null)
+        .map(toRecord);
     },
-    byId(gid: GenerationId, lessonId: LessonId): LessonRow | null {
+    byId(
+      gid: GenerationId,
+      lessonId: LessonId,
+      opts?: { includeDeleted?: boolean },
+    ): LessonRow | null {
       const row = byIdStmt.get(gid, lessonId) as LessonDbRow | undefined;
-      return row ? toRecord(row) : null;
+      return row && (opts?.includeDeleted || row.deleted_at === null)
+        ? toRecord(row)
+        : null;
+    },
+    setDeleted(gid: GenerationId, lessonId: LessonId, at: string | null): void {
+      db.raw
+        .prepare(
+          "UPDATE lessons SET deleted_at = ? WHERE generation_id = ? AND lesson_id = ?",
+        )
+        .run(at, gid, lessonId);
     },
   };
 }

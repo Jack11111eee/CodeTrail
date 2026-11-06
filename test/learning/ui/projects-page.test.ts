@@ -59,6 +59,26 @@ describe("projects page", () => {
     expect(html).toContain('data-project-id="p_0123456789abcdef"');
   });
 
+  it("puts checkpoint continuation in the project card's primary action", () => {
+    const html = renderProjectsPage(
+      pageContext,
+      projectsModel({
+        projects: [
+          projectSummary({
+            latestJobId: "j_saved" as never,
+            latestJobState: "cancelled",
+            latestJobResumeAvailable: true,
+            analyzedCommitSha: null,
+          }),
+        ],
+      }),
+    );
+    expect(html).toContain(
+      'class="primary" type="button" data-primary-job-action="retry">从断点继续</button>',
+    );
+    expect(html).toContain('data-job-id="j_saved"');
+  });
+
   it("renders the local and GitHub import forms", () => {
     const html = renderProjectsPage(pageContext, projectsModel());
     expect(html).toContain('data-project-kind="local"');
@@ -68,7 +88,7 @@ describe("projects page", () => {
     expect(html).toContain('name="ref"');
     // The placeholder shows the scheme the API actually accepts.
     expect(html).toContain('placeholder="https://github.com/owner/repo"');
-    expect(html).toContain("查看移除依赖");
+    expect(html).toContain("移除项目…");
   });
 
   it("has no inline script, CDN or non-self asset origin", () => {
@@ -116,7 +136,8 @@ describe("projects page", () => {
         ],
       }),
     );
-    expect(html).toContain("<td>—</td>");
+    expect(html).toContain("默认版本");
+    expect(html).toContain("尚未生成讲解");
     expect(html).toContain("<code>—</code>");
     expect(countTestId(html, "project-status")).toBe(1);
   });
