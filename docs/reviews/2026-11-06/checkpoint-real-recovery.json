@@ -1,0 +1,13 @@
+{
+  "ok": true,
+  "resumed": true,
+  "phase": "generating",
+  "sameRunId": true,
+  "pageCount": 22,
+  "counts": {
+    "complete": 7,
+    "pending": 15,
+    "skipped": 0
+  },
+  "modelCalls": 0
+}

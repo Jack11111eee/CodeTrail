@@ -1,0 +1,53 @@
+{
+  "backup": "/Users/huaxinzhang/.codetrail/backups/before-learning-topics-20261106T032418Z.sqlite",
+  "beforeSchema": 2,
+  "tables": {
+    "projects": {
+      "count": 15,
+      "sha256": "a87de22765d4b537aedd10515e1d5084f9003329ae927a3cc4ab442315ca9a67"
+    },
+    "repos": {
+      "count": 14,
+      "sha256": "3d1c5cfcd272e754989f06207bfaafd2ed4001030fda2a7fa9bfc4fff647e207"
+    },
+    "snapshots": {
+      "count": 8,
+      "sha256": "fe96c67d5ec5409d849706de2bd800b268f3f8e78045b7544f5526700291a0ef"
+    },
+    "generations": {
+      "count": 11,
+      "sha256": "7fdc3839bc7243e95a975a1b67357a45a833e94bb044fb1ef565537989df6fdb"
+    },
+    "lessons": {
+      "count": 11,
+      "sha256": "652e8625084e3d32935b179a3a5897e71f41d4f37c4c9be5285c1c590a1da185"
+    },
+    "sources": {
+      "count": 533,
+      "sha256": "9ebdabeb1694205796b03948a638a82fb9e4db7f6cabe6710ab968cd2c812a03"
+    },
+    "conversations": {
+      "count": 6,
+      "sha256": "06cf5a2ef952ef5843cbf1a54492550166fa91c640785aff41eca5c5f7754b74"
+    },
+    "messages": {
+      "count": 8,
+      "sha256": "c1dc7bff4ab899b727da6fe0d365719373a955134449704e7cdde1f7984feb9c"
+    },
+    "app_settings": {
+      "count": 1,
+      "sha256": "caeb7f07b077a38aeb0d13321783b2c068aa5ea3412568697884b45542383c4f"
+    },
+    "learner_preferences": {
+      "count": 2,
+      "sha256": "7579d84995000bcc587f16e637f1f90f123f0a77a8931d99ef761bdf39643306"
+    },
+    "reading_positions": {
+      "count": 3,
+      "sha256": "47ebcab14a1ad6db002977f6d02032d7cffd85b0fe174aa3b689f114037c52ed"
+    }
+  },
+  "afterSchema": 3,
+  "changedOldTables": [],
+  "initialTopicCount": 0
+}

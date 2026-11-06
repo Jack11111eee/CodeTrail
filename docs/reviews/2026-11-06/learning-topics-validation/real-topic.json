@@ -1,0 +1,27 @@
+{
+  "topic": {
+    "topic_id": "lt_9c627be1e89d4ef4",
+    "generation_id": "g_d255dca37ebd351f",
+    "title": "训练校准评估分块防泄漏",
+    "state": "ready",
+    "lesson_message_id": "m_c7ad2d28512c4bf0"
+  },
+  "answer": {
+    "status": "complete",
+    "checks": {
+      "structural": "pass",
+      "evidence": "pass",
+      "semantic": "pass"
+    },
+    "citationCount": 3
+  },
+  "uiVerified": [
+    "empty-title creation",
+    "preserved question retry",
+    "automatic title",
+    "saved article after service restart",
+    "code citation opened",
+    "wiki citation opened",
+    "separate follow-up pane"
+  ]
+}

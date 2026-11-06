@@ -1,0 +1,13 @@
+{
+  "state": "completed",
+  "attempt": 8,
+  "generationId": "g_d255dca37ebd351f",
+  "documents": 22,
+  "lessonCount": 1,
+  "checks": {
+    "structural": "pass",
+    "evidence": "pass",
+    "semantic": "pass"
+  },
+  "lessonDetailStatus": 200
+}

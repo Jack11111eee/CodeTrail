@@ -1,0 +1,9 @@
+{
+  "head": "6fe814f217f92fd5de11da52f5d03144dc52e4c5",
+  "license": {
+    "expected": "sha256:1126322e2cc8d165adc4c792eeb195717de2bcc7b39be1ce77959d78e87ef685",
+    "head": "sha256:3fcbc0e1ab0f68d1970dc08cf4fcf95c70acb05cff5d4dc72e68ca13eff2e807",
+    "workingTree": "sha256:3fcbc0e1ab0f68d1970dc08cf4fcf95c70acb05cff5d4dc72e68ca13eff2e807"
+  },
+  "phaseDAlreadyInHead": true
+}

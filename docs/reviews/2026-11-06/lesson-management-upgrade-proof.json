@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 2,
+  "preservedTables": {
+    "lessons": true,
+    "generations": true,
+    "sources": true,
+    "conversations": true,
+    "messages": true,
+    "reading_positions": true,
+    "app_settings": true
+  },
+  "currentLessonDeleted": null,
+  "backup": "/Users/huaxinzhang/.codetrail/backups/before-lesson-management-20261106T025732Z.sqlite"
+}

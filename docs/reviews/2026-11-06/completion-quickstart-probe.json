@@ -1,0 +1,14 @@
+{
+  "ok": true,
+  "root": "/var/folders/hc/n9c_9h7j3cqd14s_pgxbv4q00000gn/T/codetrail-quickstart-probe-zWplXx",
+  "result": {
+    "skipped": false
+  },
+  "totals": {
+    "calls": 7,
+    "inputTokens": 126903,
+    "outputTokens": 7359,
+    "costCents": null
+  },
+  "errors": []
+}
